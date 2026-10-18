@@ -1,0 +1,20 @@
+# Dependency directories
+node_modules/
+dist/
+
+# Output packages and temporary test runs
+*.vsix
+.vscode-test/
+.mockscope/
+
+# Internal agent directives
+.agents/
+
+# Environment configurations and logs
+.env*
+*.log
+npm-debug.log*
+
+# OS metadata
+.DS_Store
+Thumbs.db
