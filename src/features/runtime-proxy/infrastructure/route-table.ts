@@ -45,10 +45,23 @@ export class RouteTable {
 
   private matchesPattern(rawUrlOrPath: string, pattern: string): boolean {
     let cleanPath = rawUrlOrPath.split('?')[0]!.replace(/\/+$/, '') || '/';
+    let querySubPath: string | undefined;
+
     try {
-      if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
-        const parsed = new URL(cleanPath);
+      if (rawUrlOrPath.startsWith('http://') || rawUrlOrPath.startsWith('https://')) {
+        const parsed = new URL(rawUrlOrPath);
         cleanPath = parsed.pathname.replace(/\/+$/, '') || '/';
+        const q = parsed.searchParams.get('path') || parsed.searchParams.get('url') || parsed.searchParams.get('endpoint');
+        if (q) {
+          querySubPath = ('/' + q.replace(/^\/+/, '')).replace(/\/+$/, '');
+        }
+      } else if (rawUrlOrPath.includes('?')) {
+        const queryPart = rawUrlOrPath.split('?')[1] || '';
+        const params = new URLSearchParams(queryPart);
+        const q = params.get('path') || params.get('url') || params.get('endpoint');
+        if (q) {
+          querySubPath = ('/' + q.replace(/^\/+/, '')).replace(/\/+$/, '');
+        }
       }
     } catch {
     }
@@ -62,7 +75,7 @@ export class RouteTable {
     } catch {
     }
 
-    if (cleanPattern === cleanPath) {
+    if (cleanPattern === cleanPath || (querySubPath && cleanPattern === querySubPath)) {
       return true;
     }
 
@@ -72,6 +85,12 @@ export class RouteTable {
       .replace(/\*/g, '.*');                 // Wildcard * -> .*
 
     const regex = new RegExp(`^${regexPattern}$`, 'i');
-    return regex.test(cleanPath);
+    if (regex.test(cleanPath)) {
+      return true;
+    }
+    if (querySubPath && regex.test(querySubPath)) {
+      return true;
+    }
+    return false;
   }
 }

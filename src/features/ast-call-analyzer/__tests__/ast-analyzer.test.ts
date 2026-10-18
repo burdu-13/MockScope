@@ -116,6 +116,18 @@ describe('ast-call-analyzer', () => {
     expect(calls[0]!.url).toBe('/api/items/:itemId');
   });
 
+  it('should strip base URL variables and proxy parameters from template literals', () => {
+    const code = "fetch(`${this.proxyUrl}?path=genre/${type}/list`);";
+    const calls = detectApiCalls(code);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('/genre/:type/list');
+
+    const code2 = "axios.get(`${this.baseUrl}/api/v1/users/${user.id}`);";
+    const calls2 = detectApiCalls(code2);
+    expect(calls2).toHaveLength(1);
+    expect(calls2[0]!.url).toBe('/api/v1/users/:id');
+  });
+
   it('should benchmark scan speed to be well under 10ms for reasonable files', () => {
     const largeBuffer = Array.from({ length: 150 }, (_, i) => `
       axios.get<Type${i}>('/api/endpoint/${i}');

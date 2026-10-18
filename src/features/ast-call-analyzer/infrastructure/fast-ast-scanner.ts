@@ -1,20 +1,81 @@
 import * as ts from 'typescript';
 import type { DetectedApiCall, HttpMethod, ApiClientType } from '../../../shared/kernel/index';
 
+function normalizeUrlPath(rawPath: string): string {
+  let cleaned = rawPath.trim();
+  if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://') && !cleaned.startsWith('/')) {
+    cleaned = '/' + cleaned;
+  }
+  return cleaned;
+}
+
 function extractStringValue(node: ts.Node | undefined, sourceFile: ts.SourceFile): string | undefined {
   if (!node) return undefined;
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return node.text;
   }
-  if (ts.isTemplateExpression(node)) {
-    let result = node.head.text;
-    for (const span of node.templateSpans) {
-      result += `:${span.expression.getText(sourceFile)}` + span.literal.text;
-    }
-    return result;
-  }
   if (ts.isIdentifier(node)) {
     return node.getText(sourceFile);
+  }
+  return undefined;
+}
+
+function extractUrlValue(node: ts.Node | undefined, sourceFile: ts.SourceFile): string | undefined {
+  if (!node) return undefined;
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return normalizeUrlPath(node.text);
+  }
+  if (ts.isTemplateExpression(node)) {
+    let result = '';
+    const headText = node.head.text;
+    const spans = node.templateSpans;
+    let startIndex = 0;
+
+    if (!headText.trim() && spans.length > 0) {
+      const firstSpan = spans[0]!;
+      const firstExprText = firstSpan.expression.getText(sourceFile).toLowerCase();
+      const literal = firstSpan.literal.text;
+
+      const isBaseUrlVar =
+        firstExprText.includes('url') ||
+        firstExprText.includes('api') ||
+        firstExprText.includes('host') ||
+        firstExprText.includes('proxy') ||
+        firstExprText.includes('domain') ||
+        firstExprText.includes('endpoint') ||
+        firstExprText.includes('server') ||
+        firstExprText.includes('env') ||
+        firstExprText.includes('config') ||
+        literal.startsWith('/') ||
+        literal.startsWith('?path=') ||
+        literal.startsWith('?url=');
+
+      if (isBaseUrlVar) {
+        startIndex = 1;
+        const proxyQueryMatch = literal.match(/^\?(?:path|url|endpoint)=([\s\S]*)$/);
+        if (proxyQueryMatch && proxyQueryMatch[1] !== undefined) {
+          result = '/' + proxyQueryMatch[1].replace(/^\/+/, '');
+        } else {
+          result = literal.startsWith('/') ? literal : '/' + literal;
+        }
+      } else {
+        result = headText;
+      }
+    } else {
+      result = headText;
+    }
+
+    for (let i = startIndex; i < spans.length; i++) {
+      const span = spans[i]!;
+      const exprText = span.expression.getText(sourceFile);
+      const paramName = exprText.split('.').pop()?.replace(/[^a-zA-Z0-9_]/g, '') || 'param';
+      result += `:${paramName}` + span.literal.text;
+    }
+
+    return normalizeUrlPath(result);
+  }
+  if (ts.isIdentifier(node)) {
+    return normalizeUrlPath(node.getText(sourceFile));
   }
   return undefined;
 }
@@ -85,7 +146,7 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
       if (ts.isIdentifier(expr) && expr.text === 'fetch') {
         const urlArg = node.arguments[0];
         const optionsArg = node.arguments[1];
-        const url = extractStringValue(urlArg, sourceFile);
+        const url = extractUrlValue(urlArg, sourceFile);
         if (url) {
           const method = extractMethodFromOptions(optionsArg, sourceFile) || 'GET';
           let typeArg: string | undefined;
@@ -105,7 +166,7 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
 
         if (isAxios && isHttpVerb) {
           const urlArg = node.arguments[0];
-          const url = extractStringValue(urlArg, sourceFile);
+          const url = extractUrlValue(urlArg, sourceFile);
           if (url) {
             let typeArg: string | undefined;
             if (node.typeArguments && node.typeArguments.length > 0) {
@@ -121,7 +182,7 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
 
         if (isAngularHttp) {
           const urlArg = node.arguments[0];
-          const url = extractStringValue(urlArg, sourceFile);
+          const url = extractUrlValue(urlArg, sourceFile);
           if (url) {
             let typeArg: string | undefined;
             if (node.typeArguments && node.typeArguments.length > 0) {
@@ -146,13 +207,13 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
             if (ts.isPropertyAssignment(prop) && prop.name.getText(sourceFile) === 'queryKey') {
               if (ts.isArrayLiteralExpression(prop.initializer)) {
                 const firstElement = prop.initializer.elements[0];
-                inferredUrl = extractStringValue(firstElement, sourceFile);
+                inferredUrl = extractUrlValue(firstElement, sourceFile);
               }
             }
           }
         } else if (firstArg && ts.isArrayLiteralExpression(firstArg)) {
           const firstElement = firstArg.elements[0];
-          inferredUrl = extractStringValue(firstElement, sourceFile);
+          inferredUrl = extractUrlValue(firstElement, sourceFile);
         }
 
         if (inferredUrl) {

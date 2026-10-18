@@ -58,6 +58,24 @@ describe('RouteTable', () => {
 
     expect(table.match('GET', '/test')).toBeUndefined();
   });
+
+  it('should match routes queried through proxy parameter like ?path=genre/movie/list', () => {
+    const table = new RouteTable();
+    table.set({
+      id: 'genre_route',
+      method: 'GET',
+      urlPattern: '/genre/:type/list',
+      statusCode: 200,
+      body: { genres: ['Action', 'Comedy'] },
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'synthesizer',
+    });
+
+    expect(table.match('GET', '/genre/movie/list')?.id).toBe('genre_route');
+    expect(table.match('GET', '/?path=genre/movie/list')?.id).toBe('genre_route');
+    expect(table.match('GET', 'http://127.0.0.1:45990/?path=genre/movie/list')?.id).toBe('genre_route');
+  });
 });
 
 describe('RuntimeProxy Integration', () => {
