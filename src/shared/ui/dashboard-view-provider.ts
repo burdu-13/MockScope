@@ -14,7 +14,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     private readonly onToggleRoute: (routeId: string) => void,
     private readonly onClearTraffic: () => void,
     private readonly onToggleProxy: () => void,
-    private readonly onToggleCdp: () => void
+    private readonly onToggleCdp: () => void,
+    private readonly onOpenWorkbench: () => void
   ) {}
 
   public resolveWebviewView(
@@ -33,6 +34,9 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage((message) => {
       switch (message.type) {
+        case 'openWorkbench':
+          this.onOpenWorkbench();
+          break;
         case 'toggleProxy':
           this.onToggleProxy();
           break;
@@ -211,9 +215,10 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       <span id="cdpBadge" class="status-badge status-off">DETACHED</span>
     </div>
     <div class="button-group">
+      <button id="openWorkbenchBtn" nonce="${nonce}" style="background: #007acc; font-weight: bold;">🚀 Open Workbench</button>
       <button id="toggleProxyBtn" nonce="${nonce}">Toggle Proxy</button>
       <button id="toggleCdpBtn" nonce="${nonce}">Toggle CDP</button>
-      <button id="clearTrafficBtn" nonce="${nonce}">Clear Traffic</button>
+      <button id="clearTrafficBtn" nonce="${nonce}">Clear</button>
     </div>
   </div>
 
@@ -234,6 +239,9 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
+    document.getElementById('openWorkbenchBtn').addEventListener('click', () => {
+      vscode.postMessage({ type: 'openWorkbench' });
+    });
     document.getElementById('toggleProxyBtn').addEventListener('click', () => {
       vscode.postMessage({ type: 'toggleProxy' });
     });

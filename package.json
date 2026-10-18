@@ -66,6 +66,11 @@
         "category": "MockScope"
       },
       {
+        "command": "mockscope.openWorkbench",
+        "title": "MockScope: Open Workbench (Visual Workbench)",
+        "category": "MockScope"
+      },
+      {
         "command": "mockscope.openDashboard",
         "title": "MockScope: Open Traffic & Route Dashboard",
         "category": "MockScope"

@@ -9,7 +9,7 @@ import { RuntimeProxy, DEFAULT_PROXY_PORT } from '../features/runtime-proxy/inde
 import { CdpBridgeController } from '../features/cdp-bridge/index';
 import { generatePlaywrightSpec, generateMswHandler } from '../features/test-exporter/index';
 import { ApiCodeLensProvider } from '../features/codelens-provider/index';
-import { DashboardViewProvider } from '../shared/ui/index';
+import { DashboardViewProvider, WorkbenchPanel } from '../shared/ui/index';
 
 let runtimeProxy: RuntimeProxy | null = null;
 let cdpBridge: CdpBridgeController | null = null;
@@ -19,9 +19,9 @@ let statusBarItem: vscode.StatusBarItem | null = null;
 export function activate(context: vscode.ExtensionContext): void {
 
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  statusBarItem.command = 'mockscope.openDashboard';
-  statusBarItem.text = '$(radio-tower) MockScope';
-  statusBarItem.tooltip = 'Click to open MockScope Dashboard';
+  statusBarItem.command = 'mockscope.openWorkbench';
+  statusBarItem.text = '$(radio-tower) MockScope Workbench';
+  statusBarItem.tooltip = 'Click to open MockScope Workbench (Visual Workbench)';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
@@ -66,6 +66,71 @@ export function activate(context: vscode.ExtensionContext): void {
     port: cdpBridge?.debugPort ?? 9222,
   });
 
+  const openWorkbench = () => {
+    WorkbenchPanel.createOrShow(
+      context.extensionUri,
+      () => ({
+        proxy: getProxyState(),
+        cdp: getCdpState(),
+        routes: getRoutes(),
+        traffic: getTraffic(),
+      }),
+      {
+        onToggleProxy: async () => {
+          if (runtimeProxy?.isRunning) {
+            await vscode.commands.executeCommand('mockscope.stopProxy');
+          } else {
+            await vscode.commands.executeCommand('mockscope.startProxy');
+          }
+        },
+        onToggleCdp: async () => {
+          if (cdpBridge?.isAttached) {
+            await vscode.commands.executeCommand('mockscope.detachCdp');
+          } else {
+            await vscode.commands.executeCommand('mockscope.attachCdp');
+          }
+        },
+        onSaveRoute: (route: MockRoute) => {
+          if (!runtimeProxy) {
+            runtimeProxy = new RuntimeProxy(DEFAULT_PROXY_PORT);
+          }
+          runtimeProxy.addRoute(route);
+          if (cdpBridge) {
+            cdpBridge.addRoute(route);
+          }
+          vscode.window.showInformationMessage(`Saved mock route for ${route.method} ${route.urlPattern}`);
+          dashboardProvider?.refresh();
+          WorkbenchPanel.currentPanel?.refresh();
+        },
+        onDeleteRoute: (routeId: string) => {
+          runtimeProxy?.removeRoute(routeId);
+          cdpBridge?.removeRoute(routeId);
+          vscode.window.showInformationMessage('Mock route deleted.');
+          dashboardProvider?.refresh();
+          WorkbenchPanel.currentPanel?.refresh();
+        },
+        onToggleRoute: (routeId: string) => {
+          const route = getRoutes().find((r) => r.id === routeId);
+          if (route) {
+            route.enabled = !route.enabled;
+            dashboardProvider?.refresh();
+            WorkbenchPanel.currentPanel?.refresh();
+          }
+        },
+        onClearTraffic: () => {
+          runtimeProxy?.clearTraffic();
+          cdpBridge?.clearTraffic();
+          dashboardProvider?.refresh();
+          WorkbenchPanel.currentPanel?.refresh();
+        },
+        onCopyText: async (text: string, label: string) => {
+          await vscode.env.clipboard.writeText(text);
+          vscode.window.showInformationMessage(`📋 Copied ${label} to clipboard!`);
+        },
+      }
+    );
+  };
+
   dashboardProvider = new DashboardViewProvider(
     context.extensionUri,
     getProxyState,
@@ -77,12 +142,14 @@ export function activate(context: vscode.ExtensionContext): void {
       if (current) {
         current.enabled = !current.enabled;
         dashboardProvider?.refresh();
+        WorkbenchPanel.currentPanel?.refresh();
       }
     },
     () => {
       runtimeProxy?.clearTraffic();
       cdpBridge?.clearTraffic();
       dashboardProvider?.refresh();
+      WorkbenchPanel.currentPanel?.refresh();
     },
     async () => {
       if (runtimeProxy?.isRunning) {
@@ -97,7 +164,8 @@ export function activate(context: vscode.ExtensionContext): void {
       } else {
         await vscode.commands.executeCommand('mockscope.attachCdp');
       }
-    }
+    },
+    openWorkbench
   );
 
   context.subscriptions.push(
@@ -121,10 +189,11 @@ export function activate(context: vscode.ExtensionContext): void {
       statusBarItem!.text = `$(radio-tower) MockScope: CDP`;
       statusBarItem!.backgroundColor = undefined;
     } else {
-      statusBarItem!.text = `$(radio-tower) MockScope: Idle`;
+      statusBarItem!.text = `$(radio-tower) MockScope: Workbench`;
       statusBarItem!.backgroundColor = undefined;
     }
     dashboardProvider?.refresh();
+    WorkbenchPanel.currentPanel?.refresh();
   };
 
   context.subscriptions.push({
@@ -134,10 +203,16 @@ export function activate(context: vscode.ExtensionContext): void {
     dispose: globalEventBus.on('cdp:stateChanged', () => updateStatusBar()),
   });
   context.subscriptions.push({
-    dispose: globalEventBus.on('traffic:logged', () => dashboardProvider?.refresh()),
+    dispose: globalEventBus.on('traffic:logged', () => {
+      dashboardProvider?.refresh();
+      WorkbenchPanel.currentPanel?.refresh();
+    }),
   });
   context.subscriptions.push({
-    dispose: globalEventBus.on('route:upserted', () => dashboardProvider?.refresh()),
+    dispose: globalEventBus.on('route:upserted', () => {
+      dashboardProvider?.refresh();
+      WorkbenchPanel.currentPanel?.refresh();
+    }),
   });
 
   context.subscriptions.push(
@@ -282,9 +357,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('mockscope.openDashboard', async () => {
-      await vscode.commands.executeCommand('mockscope.dashboardView.focus');
-    })
+    vscode.commands.registerCommand('mockscope.openWorkbench', openWorkbench)
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mockscope.openDashboard', openWorkbench)
   );
 
   updateStatusBar();
