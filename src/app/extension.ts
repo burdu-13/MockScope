@@ -9,6 +9,7 @@ import { RuntimeProxy, DEFAULT_PROXY_PORT } from '../features/runtime-proxy/inde
 import { CdpBridgeController } from '../features/cdp-bridge/index';
 import { generatePlaywrightSpec, generateMswHandler } from '../features/test-exporter/index';
 import { ApiCodeLensProvider } from '../features/codelens-provider/index';
+import { detectApiCalls } from '../features/ast-call-analyzer/index';
 import { DashboardViewProvider, WorkbenchPanel } from '../shared/ui/index';
 
 let runtimeProxy: RuntimeProxy | null = null;
@@ -66,6 +67,69 @@ export function activate(context: vscode.ExtensionContext): void {
     port: cdpBridge?.debugPort ?? 9222,
   });
 
+  let cachedDiscoveredCalls: DetectedApiCall[] = [];
+
+  const scanWorkspaceApiCalls = async (): Promise<DetectedApiCall[]> => {
+    try {
+      const files = await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx}', '**/node_modules/**', 100);
+      const allCalls: DetectedApiCall[] = [];
+
+      for (const file of files) {
+        try {
+          const doc = await vscode.workspace.openTextDocument(file);
+          const calls = detectApiCalls(doc.getText(), file.fsPath);
+          allCalls.push(...calls);
+        } catch {
+        }
+      }
+
+      cachedDiscoveredCalls = allCalls;
+      return allCalls;
+    } catch {
+      return [];
+    }
+  };
+
+  const autoMockCall = async (call: DetectedApiCall) => {
+    let sourceText = '';
+    if (call.fileName) {
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(call.fileName));
+        sourceText = doc.getText();
+      } catch {
+      }
+    }
+    const variants = generateMockVariants(call.typeArgument, null, sourceText);
+    const route: MockRoute = {
+      id: `route_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      method: call.method,
+      urlPattern: call.url,
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: variants.ok200.body,
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'synthesizer',
+    };
+
+    if (!runtimeProxy) {
+      runtimeProxy = new RuntimeProxy(DEFAULT_PROXY_PORT);
+    }
+    runtimeProxy.addRoute(route);
+    if (cdpBridge) {
+      cdpBridge.addRoute(route);
+    }
+    dashboardProvider?.refresh();
+    WorkbenchPanel.currentPanel?.refresh();
+  };
+
+  const autoMockAllCalls = async (calls: DetectedApiCall[]) => {
+    for (const call of calls) {
+      await autoMockCall(call);
+    }
+    vscode.window.showInformationMessage(`⚡ MockScope: Auto-generated realistic mocks for all ${calls.length} endpoints!`);
+  };
+
   const openWorkbench = () => {
     WorkbenchPanel.createOrShow(
       context.extensionUri,
@@ -74,6 +138,7 @@ export function activate(context: vscode.ExtensionContext): void {
         cdp: getCdpState(),
         routes: getRoutes(),
         traffic: getTraffic(),
+        discoveredCalls: cachedDiscoveredCalls,
       }),
       {
         onToggleProxy: async () => {
@@ -127,6 +192,9 @@ export function activate(context: vscode.ExtensionContext): void {
           await vscode.env.clipboard.writeText(text);
           vscode.window.showInformationMessage(`📋 Copied ${label} to clipboard!`);
         },
+        onScanWorkspace: scanWorkspaceApiCalls,
+        onMockDetectedCall: autoMockCall,
+        onMockAllCalls: autoMockAllCalls,
       }
     );
   };

@@ -4,6 +4,7 @@ import {
   assertLoopbackHost,
   type MockRoute,
   type TrafficEntry,
+  type DetectedApiCall,
 } from '../kernel/index';
 
 export class WorkbenchPanel {
@@ -20,6 +21,7 @@ export class WorkbenchPanel {
       cdp: { attached: boolean; port: number };
       routes: MockRoute[];
       traffic: TrafficEntry[];
+      discoveredCalls: DetectedApiCall[];
     },
     actions: {
       onToggleProxy: () => Promise<void>;
@@ -29,6 +31,9 @@ export class WorkbenchPanel {
       onToggleRoute: (routeId: string) => void;
       onClearTraffic: () => void;
       onCopyText: (text: string, label: string) => void;
+      onScanWorkspace: () => Promise<DetectedApiCall[]>;
+      onMockDetectedCall: (call: DetectedApiCall) => Promise<void>;
+      onMockAllCalls: (calls: DetectedApiCall[]) => Promise<void>;
     }
   ): WorkbenchPanel {
     const column = vscode.window.activeTextEditor
@@ -63,6 +68,7 @@ export class WorkbenchPanel {
       cdp: { attached: boolean; port: number };
       routes: MockRoute[];
       traffic: TrafficEntry[];
+      discoveredCalls: DetectedApiCall[];
     },
     private readonly actions: {
       onToggleProxy: () => Promise<void>;
@@ -72,6 +78,9 @@ export class WorkbenchPanel {
       onToggleRoute: (routeId: string) => void;
       onClearTraffic: () => void;
       onCopyText: (text: string, label: string) => void;
+      onScanWorkspace: () => Promise<DetectedApiCall[]>;
+      onMockDetectedCall: (call: DetectedApiCall) => Promise<void>;
+      onMockAllCalls: (calls: DetectedApiCall[]) => Promise<void>;
     }
   ) {
     this._panel = panel;
@@ -104,8 +113,26 @@ export class WorkbenchPanel {
           case 'copyText':
             this.actions.onCopyText(message.text, message.label);
             break;
+          case 'scanWorkspace': {
+            const calls = await this.actions.onScanWorkspace();
+            this._panel.webview.postMessage({ type: 'discoveredCalls', calls });
+            break;
+          }
+          case 'mockDetectedCall': {
+            await this.actions.onMockDetectedCall(message.call);
+            this.refresh();
+            break;
+          }
+          case 'mockAllCalls': {
+            await this.actions.onMockAllCalls(message.calls);
+            this.refresh();
+            break;
+          }
           case 'ready':
             this.refresh();
+            this.actions.onScanWorkspace().then((calls) => {
+              this._panel.webview.postMessage({ type: 'discoveredCalls', calls });
+            });
             break;
         }
       },
@@ -200,7 +227,7 @@ export class WorkbenchPanel {
     .top-controls {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
     .badge {
       padding: 3px 10px;
@@ -238,6 +265,14 @@ export class WorkbenchPanel {
       background: var(--card-bg);
       border-color: var(--fg);
     }
+    button.accent {
+      background: #238636;
+      color: #fff;
+      font-weight: 600;
+    }
+    button.accent:hover {
+      background: #2ea043;
+    }
     button.danger {
       background: var(--danger);
     }
@@ -249,7 +284,7 @@ export class WorkbenchPanel {
     }
 
     .left-pane {
-      width: 440px;
+      width: 480px;
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -282,6 +317,7 @@ export class WorkbenchPanel {
       border-bottom: 1px solid var(--border);
       display: flex;
       gap: 8px;
+      align-items: center;
     }
     input[type="text"], select, textarea {
       background: var(--input-bg);
@@ -357,8 +393,19 @@ export class WorkbenchPanel {
     .card-sub {
       display: flex;
       justify-content: space-between;
+      align-items: center;
       font-size: 11px;
       color: #888;
+    }
+
+    .type-tag {
+      background: rgba(0, 122, 204, 0.15);
+      color: #4fc1ff;
+      border: 1px solid rgba(79, 193, 255, 0.3);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 10px;
     }
 
     .right-pane {
@@ -425,6 +472,8 @@ export class WorkbenchPanel {
       align-items: center;
       color: #777;
       gap: 12px;
+      padding: 20px;
+      text-align: center;
     }
     .tab-content-panel {
       background: var(--bg);
@@ -436,6 +485,16 @@ export class WorkbenchPanel {
       max-height: 220px;
       overflow-y: auto;
       white-space: pre-wrap;
+    }
+    .banner-bar {
+      background: rgba(0, 122, 204, 0.15);
+      border: 1px solid rgba(0, 122, 204, 0.3);
+      padding: 10px 14px;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
     }
   </style>
 </head>
@@ -454,15 +513,16 @@ export class WorkbenchPanel {
       </div>
       <button id="toggleProxyBtn" nonce="${nonce}">Toggle Proxy</button>
       <button id="toggleCdpBtn" nonce="${nonce}" class="secondary">Toggle CDP</button>
+      <button id="scanBtn" class="secondary" nonce="${nonce}">🔍 Scan Codebase</button>
       <button id="addMockBtn" nonce="${nonce}">+ New Mock Route</button>
     </div>
   </header>
 
   <div class="workbench-layout">
-    <!-- Left Pane -->
     <div class="left-pane">
       <div class="tab-bar">
-        <div id="tabTraffic" class="tab active" nonce="${nonce}">Live Traffic (<span id="trafficCount">0</span>)</div>
+        <div id="tabDiscovered" class="tab active" nonce="${nonce}">🔍 Discovered (<span id="discoveredCount">0</span>)</div>
+        <div id="tabTraffic" class="tab" nonce="${nonce}">Live Traffic (<span id="trafficCount">0</span>)</div>
         <div id="tabRoutes" class="tab" nonce="${nonce}">Mock Routes (<span id="routeCount">0</span>)</div>
       </div>
       <div class="filter-bar">
@@ -474,18 +534,18 @@ export class WorkbenchPanel {
           <option value="PUT">PUT</option>
           <option value="DELETE">DELETE</option>
         </select>
-        <button id="clearBtn" class="secondary" nonce="${nonce}" title="Clear Traffic">Clear</button>
+        <button id="clearBtn" class="secondary" nonce="${nonce}" title="Clear list">Clear</button>
       </div>
       <div id="itemList" class="item-list-container">
         <!-- Rendered dynamically -->
       </div>
     </div>
 
-    <!-- Right Pane (Inspector & Editor) -->
     <div id="rightPane" class="right-pane">
       <div class="empty-prompt">
-        <span style="font-size: 36px;">🎯</span>
-        <span>Select an intercepted request or mock route to inspect and edit.</span>
+        <span style="font-size: 42px;">🔍</span>
+        <span style="font-size: 16px; font-weight: 600;">Automated API Discovery</span>
+        <span>MockScope automatically scans your codebase for <code>fetch</code>, <code>axios</code>, and <code>useQuery</code> calls.<br>Select any discovered API on the left or click "Auto-Mock All" to generate realistic data instantly!</span>
       </div>
     </div>
   </div>
@@ -497,10 +557,11 @@ export class WorkbenchPanel {
       proxy: { running: false, port: 45990 },
       cdp: { attached: false, port: 9222 },
       routes: [],
-      traffic: []
+      traffic: [],
+      discoveredCalls: []
     };
 
-    let activeTab = 'traffic'; // 'traffic' | 'routes'
+    let activeTab = 'discovered'; // 'discovered' | 'traffic' | 'routes'
     let selectedId = null;
     let filterText = '';
     let filterMethod = 'ALL';
@@ -508,7 +569,9 @@ export class WorkbenchPanel {
     const toggleProxyBtn = document.getElementById('toggleProxyBtn');
     const toggleCdpBtn = document.getElementById('toggleCdpBtn');
     const addMockBtn = document.getElementById('addMockBtn');
+    const scanBtn = document.getElementById('scanBtn');
     const clearBtn = document.getElementById('clearBtn');
+    const tabDiscovered = document.getElementById('tabDiscovered');
     const tabTraffic = document.getElementById('tabTraffic');
     const tabRoutes = document.getElementById('tabRoutes');
     const filterInput = document.getElementById('filterInput');
@@ -516,9 +579,19 @@ export class WorkbenchPanel {
     const itemList = document.getElementById('itemList');
     const rightPane = document.getElementById('rightPane');
 
+    tabDiscovered.addEventListener('click', () => {
+      activeTab = 'discovered';
+      tabDiscovered.classList.add('active');
+      tabTraffic.classList.remove('active');
+      tabRoutes.classList.remove('active');
+      selectedId = null;
+      render();
+    });
+
     tabTraffic.addEventListener('click', () => {
       activeTab = 'traffic';
       tabTraffic.classList.add('active');
+      tabDiscovered.classList.remove('active');
       tabRoutes.classList.remove('active');
       selectedId = null;
       render();
@@ -527,6 +600,7 @@ export class WorkbenchPanel {
     tabRoutes.addEventListener('click', () => {
       activeTab = 'routes';
       tabRoutes.classList.add('active');
+      tabDiscovered.classList.remove('active');
       tabTraffic.classList.remove('active');
       selectedId = null;
       render();
@@ -534,7 +608,16 @@ export class WorkbenchPanel {
 
     toggleProxyBtn.addEventListener('click', () => vscode.postMessage({ type: 'toggleProxy' }));
     toggleCdpBtn.addEventListener('click', () => vscode.postMessage({ type: 'toggleCdp' }));
-    clearBtn.addEventListener('click', () => vscode.postMessage({ type: 'clearTraffic' }));
+    scanBtn.addEventListener('click', () => vscode.postMessage({ type: 'scanWorkspace' }));
+    clearBtn.addEventListener('click', () => {
+      if (activeTab === 'traffic') {
+        vscode.postMessage({ type: 'clearTraffic' });
+      } else {
+        filterInput.value = '';
+        filterText = '';
+        renderList();
+      }
+    });
 
     filterInput.addEventListener('input', (e) => {
       filterText = e.target.value.toLowerCase();
@@ -549,6 +632,7 @@ export class WorkbenchPanel {
     addMockBtn.addEventListener('click', () => {
       activeTab = 'routes';
       tabRoutes.classList.add('active');
+      tabDiscovered.classList.remove('active');
       tabTraffic.classList.remove('active');
       selectedId = 'NEW_ROUTE';
       render();
@@ -556,8 +640,12 @@ export class WorkbenchPanel {
 
     window.addEventListener('message', (event) => {
       if (event.data.type === 'stateUpdate') {
-        state = event.data;
+        state = { ...state, ...event.data };
         render();
+      } else if (event.data.type === 'discoveredCalls') {
+        state.discoveredCalls = event.data.calls || [];
+        document.getElementById('discoveredCount').textContent = state.discoveredCalls.length;
+        renderList();
       }
     });
 
@@ -586,6 +674,7 @@ export class WorkbenchPanel {
         toggleCdpBtn.textContent = 'Attach CDP';
       }
 
+      document.getElementById('discoveredCount').textContent = (state.discoveredCalls || []).length;
       document.getElementById('trafficCount').textContent = state.traffic.length;
       document.getElementById('routeCount').textContent = state.routes.length;
 
@@ -605,7 +694,71 @@ export class WorkbenchPanel {
     function renderList() {
       itemList.innerHTML = '';
 
-      if (activeTab === 'traffic') {
+      if (activeTab === 'discovered') {
+        const calls = state.discoveredCalls || [];
+        const filtered = calls.filter(c => {
+          const matchUrl = c.url.toLowerCase().includes(filterText);
+          const matchMethod = filterMethod === 'ALL' || c.method.toUpperCase() === filterMethod;
+          return matchUrl && matchMethod;
+        });
+
+        if (calls.length > 0) {
+          const banner = document.createElement('div');
+          banner.className = 'banner-bar';
+          banner.innerHTML = \`
+            <span><strong>\${calls.length}</strong> API calls discovered in project</span>
+            <button id="mockAllBtn" class="accent" nonce="${nonce}">⚡ Auto-Mock All</button>
+          \`;
+          itemList.appendChild(banner);
+
+          banner.querySelector('#mockAllBtn').addEventListener('click', () => {
+            vscode.postMessage({ type: 'mockAllCalls', calls: state.discoveredCalls });
+          });
+        }
+
+        if (filtered.length === 0) {
+          const empty = document.createElement('div');
+          empty.style.color = '#888';
+          empty.style.textAlign = 'center';
+          empty.style.padding = '24px';
+          empty.innerHTML = 'No API calls detected yet. Click "🔍 Scan Codebase" above.';
+          itemList.appendChild(empty);
+          return;
+        }
+
+        filtered.forEach(call => {
+          const isAlreadyMocked = state.routes.some(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
+          const card = document.createElement('div');
+          card.className = 'list-card' + (selectedId === call.id ? ' selected' : '');
+          const filename = (call.fileName || '').split(/[\\\\/]/).pop() || '';
+
+          card.innerHTML = \`
+            <div class="card-top">
+              <span class="method-tag \${getMethodTagClass(call.method)}">\${call.method}</span>
+              <span class="path-text" title="\${call.url}">\${call.url}</span>
+              \${call.typeArgument ? \`<span class="type-tag" title="Generic return type">&lt;\${call.typeArgument}&gt;</span>\` : ''}
+            </div>
+            <div class="card-sub">
+              <span>\${call.clientType} in \${filename}</span>
+              \${isAlreadyMocked ? '<span style="color: var(--success); font-weight:600;">✓ Mock Active</span>' : '<button class="mini-mock-btn" style="padding:2px 8px; font-size:10px;">⚡ Mock</button>'}
+            </div>
+          \`;
+
+          const mockBtn = card.querySelector('.mini-mock-btn');
+          if (mockBtn) {
+            mockBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              vscode.postMessage({ type: 'mockDetectedCall', call });
+            });
+          }
+
+          card.addEventListener('click', () => {
+            selectedId = call.id;
+            render();
+          });
+          itemList.appendChild(card);
+        });
+      } else if (activeTab === 'traffic') {
         const filtered = state.traffic.filter(t => {
           const matchUrl = t.url.toLowerCase().includes(filterText);
           const matchMethod = filterMethod === 'ALL' || t.method.toUpperCase() === filterMethod;
@@ -677,13 +830,65 @@ export class WorkbenchPanel {
         rightPane.innerHTML = \`
           <div class="empty-prompt">
             <span style="font-size: 36px;">🎯</span>
-            <span>Select an intercepted request or mock route to inspect and edit.</span>
+            <span>Select an item on the left to inspect, edit, or auto-mock.</span>
           </div>
         \`;
         return;
       }
 
-      if (activeTab === 'traffic') {
+      if (activeTab === 'discovered') {
+        const call = (state.discoveredCalls || []).find(c => c.id === selectedId);
+        if (!call) return;
+
+        const isMockActive = state.routes.some(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
+
+        rightPane.innerHTML = \`
+          <div class="inspector-header">
+            <div class="inspector-title">
+              <span class="method-tag \${getMethodTagClass(call.method)}">\${call.method}</span>
+              <span>\${call.url}</span>
+            </div>
+            <div class="inspector-actions">
+              <button id="inspectMockBtn" class="accent" nonce="${nonce}">⚡ Auto-Generate Mock Now</button>
+            </div>
+          </div>
+          <div class="inspector-body">
+            <div class="form-row">
+              <div class="form-group" style="flex: 1;">
+                <label>Client Type</label>
+                <input type="text" readonly value="\${call.clientType}">
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label>TypeScript Return Generic</label>
+                <input type="text" readonly value="\${call.typeArgument || 'None (auto-inferred)'}">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Source Code Location</label>
+              <input type="text" readonly value="\${call.fileName || 'file.ts'} (Line \${call.range.start.line + 1})">
+            </div>
+
+            <div class="form-group">
+              <label>Detected Expression in Code</label>
+              <div class="tab-content-panel">\${call.rawExpression}</div>
+            </div>
+
+            <div style="background: rgba(0, 122, 204, 0.1); border: 1px solid var(--accent); padding: 14px; border-radius: 4px;">
+              <strong>Auto-Synthesis Guarantee:</strong> MockScope analyzes this call site's TypeScript type <code>&lt;\${call.typeArgument || 'Object'}&gt;</code> and generates matching realistic data without any manual schema typing.
+            </div>
+          </div>
+        \`;
+
+        document.getElementById('inspectMockBtn').addEventListener('click', () => {
+          vscode.postMessage({ type: 'mockDetectedCall', call });
+          activeTab = 'routes';
+          tabRoutes.classList.add('active');
+          tabDiscovered.classList.remove('active');
+          tabTraffic.classList.remove('active');
+          render();
+        });
+      } else if (activeTab === 'traffic') {
         const item = state.traffic.find(t => t.id === selectedId);
         if (!item) return;
 
@@ -756,6 +961,7 @@ export class WorkbenchPanel {
           vscode.postMessage({ type: 'saveRoute', route: newRoute });
           activeTab = 'routes';
           tabRoutes.classList.add('active');
+          tabDiscovered.classList.remove('active');
           tabTraffic.classList.remove('active');
           selectedId = newRoute.id;
           render();
