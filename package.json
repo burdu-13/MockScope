@@ -1,0 +1,124 @@
+{
+  "name": "mockscope",
+  "displayName": "MockScope",
+  "description": "Ultra-fast, zero-trust API mocking and traffic interception directly from your editor.",
+  "version": "0.1.0",
+  "publisher": "mockscope",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "mock",
+    "api",
+    "proxy",
+    "cdp",
+    "playwright",
+    "msw",
+    "codelens"
+  ],
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mockscope.startProxy",
+        "title": "MockScope: Start Local Mock Proxy",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.stopProxy",
+        "title": "MockScope: Stop Local Mock Proxy",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.attachCdp",
+        "title": "MockScope: Attach Browser CDP Bridge",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.detachCdp",
+        "title": "MockScope: Detach Browser CDP Bridge",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.mockCall",
+        "title": "MockScope: Mock API Call",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.copyPlaywrightSpec",
+        "title": "MockScope: Copy Playwright Route Spec",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.copyMswHandler",
+        "title": "MockScope: Copy MSW v2 Handler",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.openDashboard",
+        "title": "MockScope: Open Traffic & Route Dashboard",
+        "category": "MockScope"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mockscope-explorer",
+          "title": "MockScope",
+          "icon": "$(radio-tower)"
+        }
+      ]
+    },
+    "views": {
+      "mockscope-explorer": [
+        {
+          "type": "webview",
+          "id": "mockscope.dashboardView",
+          "name": "Live Traffic & Route Table"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.js --production",
+    "watch": "node esbuild.config.js --watch",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "@vitest/coverage-v8": "^1.6.1",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.2"
+  },
+  "dependencies": {
+    "typescript": "^5.3.3",
+    "ws": "^8.16.0"
+  },
+  "author": "burdu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/burdu-13/MockScope.git"
+  },
+  "bugs": {
+    "url": "https://github.com/burdu-13/MockScope/issues"
+  },
+  "homepage": "https://github.com/burdu-13/MockScope#readme"
+}
