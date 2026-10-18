@@ -34,6 +34,7 @@ export class WorkbenchPanel {
       onScanWorkspace: () => Promise<DetectedApiCall[]>;
       onMockDetectedCall: (call: DetectedApiCall) => Promise<void>;
       onMockAllCalls: (calls: DetectedApiCall[]) => Promise<void>;
+      onOpenEndpointInBrowser: (url: string) => Promise<void>;
     }
   ): WorkbenchPanel {
     const column = vscode.window.activeTextEditor
@@ -81,6 +82,7 @@ export class WorkbenchPanel {
       onScanWorkspace: () => Promise<DetectedApiCall[]>;
       onMockDetectedCall: (call: DetectedApiCall) => Promise<void>;
       onMockAllCalls: (calls: DetectedApiCall[]) => Promise<void>;
+      onOpenEndpointInBrowser: (url: string) => Promise<void>;
     }
   ) {
     this._panel = panel;
@@ -112,6 +114,9 @@ export class WorkbenchPanel {
             break;
           case 'copyText':
             this.actions.onCopyText(message.text, message.label);
+            break;
+          case 'openEndpointInBrowser':
+            await this.actions.onOpenEndpointInBrowser(message.url);
             break;
           case 'scanWorkspace': {
             const calls = await this.actions.onScanWorkspace();
@@ -184,16 +189,23 @@ export class WorkbenchPanel {
       --fg: var(--vscode-editor-foreground, #cccccc);
       --card-bg: var(--vscode-editorWidget-background, #252526);
       --border: var(--vscode-widget-border, #3c3c3c);
+      --panel-border: var(--vscode-panel-border, #333333);
       --btn-bg: var(--vscode-button-background, #0e639c);
       --btn-fg: var(--vscode-button-foreground, #ffffff);
       --btn-hover: var(--vscode-button-hoverBackground, #1177bb);
+      --btn-sec-bg: var(--vscode-button-secondaryBackground, #3a3d41);
+      --btn-sec-fg: var(--vscode-button-secondaryForeground, #ffffff);
+      --btn-sec-hover: var(--vscode-button-secondaryHoverBackground, #45494e);
       --input-bg: var(--vscode-input-background, #3c3c3c);
       --input-fg: var(--vscode-input-foreground, #cccccc);
       --input-border: var(--vscode-input-border, #3c3c3c);
+      --focus-border: var(--vscode-focusBorder, #007acc);
       --accent: #007acc;
       --success: #3fb950;
       --warning: #d29922;
       --danger: #f85149;
+      --muted: var(--vscode-descriptionForeground, #8c8c8c);
+      --code-font: var(--vscode-editor-font-family, Consolas, 'Courier New', monospace);
     }
     body {
       margin: 0;
@@ -215,35 +227,68 @@ export class WorkbenchPanel {
       justify-content: space-between;
       align-items: center;
       flex-shrink: 0;
+      gap: 12px;
     }
     .brand {
       display: flex;
       align-items: center;
       gap: 10px;
       font-weight: 700;
-      font-size: 15px;
-      color: #fff;
+      font-size: 14px;
+      color: #ffffff;
+      letter-spacing: 0.3px;
+    }
+    .brand-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+    }
+    .brand-tag {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 10px;
+      background: rgba(0, 122, 204, 0.15);
+      color: #4fc1ff;
+      border: 1px solid rgba(0, 122, 204, 0.3);
+      letter-spacing: 0.5px;
     }
     .top-controls {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
+      flex-wrap: wrap;
     }
-    .badge {
-      padding: 3px 10px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: 600;
-      display: inline-flex;
+    .status-cluster {
+      display: flex;
       align-items: center;
-      gap: 5px;
+      gap: 8px;
+      background: var(--bg);
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      font-size: 11px;
     }
-    .badge-online { background: rgba(63, 185, 80, 0.2); color: var(--success); border: 1px solid var(--success); }
-    .badge-offline { background: rgba(136, 136, 136, 0.2); color: #888; border: 1px solid #555; }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .status-dot.online {
+      background-color: var(--success);
+      box-shadow: 0 0 6px rgba(63, 185, 80, 0.6);
+    }
+    .status-dot.offline {
+      background-color: #6e7681;
+    }
 
     button {
-      background: var(--btn-bg);
-      color: var(--btn-fg);
+      background: var(--btn-sec-bg);
+      color: var(--btn-sec-fg);
       border: 1px solid transparent;
       padding: 6px 12px;
       border-radius: 4px;
@@ -253,28 +298,39 @@ export class WorkbenchPanel {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: background 0.15s ease;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+      user-select: none;
     }
-    button:hover { background: var(--btn-hover); }
-    button.secondary {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--fg);
-    }
-    button.secondary:hover {
-      background: var(--card-bg);
-      border-color: var(--fg);
-    }
-    button.accent {
-      background: #238636;
-      color: #fff;
+    button:hover { background: var(--btn-sec-hover); }
+    button:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 1px; }
+    button.primary {
+      background: var(--btn-bg);
+      color: var(--btn-fg);
       font-weight: 600;
     }
-    button.accent:hover {
-      background: #2ea043;
+    button.primary:hover { background: var(--btn-hover); }
+    button.accent {
+      background: #238636;
+      color: #ffffff;
+      font-weight: 600;
     }
+    button.accent:hover { background: #2ea043; }
     button.danger {
-      background: var(--danger);
+      background: transparent;
+      border: 1px solid var(--danger);
+      color: var(--danger);
+    }
+    button.danger:hover {
+      background: rgba(248, 81, 73, 0.15);
+    }
+    button.btn-compact {
+      padding: 3px 8px;
+      font-size: 11px;
+    }
+    button.btn-success {
+      background: rgba(63, 185, 80, 0.2) !important;
+      color: var(--success) !important;
+      border-color: var(--success) !important;
     }
 
     .workbench-layout {
@@ -284,7 +340,7 @@ export class WorkbenchPanel {
     }
 
     .left-pane {
-      width: 480px;
+      width: 440px;
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -298,19 +354,35 @@ export class WorkbenchPanel {
     }
     .tab {
       flex: 1;
-      padding: 10px;
+      padding: 10px 8px;
       text-align: center;
       cursor: pointer;
       font-weight: 600;
-      font-size: 12px;
-      color: #888;
+      font-size: 11px;
+      color: var(--muted);
       border-bottom: 2px solid transparent;
       user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .tab:hover {
+      color: var(--fg);
     }
     .tab.active {
       color: var(--fg);
       border-bottom-color: var(--accent);
       background: var(--bg);
+    }
+    .tab-count {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      color: inherit;
     }
     .filter-bar {
       padding: 8px 12px;
@@ -318,6 +390,7 @@ export class WorkbenchPanel {
       display: flex;
       gap: 8px;
       align-items: center;
+      background: var(--bg);
     }
     input[type="text"], select, textarea {
       background: var(--input-bg);
@@ -327,9 +400,11 @@ export class WorkbenchPanel {
       border-radius: 4px;
       font-size: 12px;
       font-family: inherit;
+      transition: border-color 0.15s ease;
     }
     input[type="text"]:focus, select:focus, textarea:focus {
-      outline: 1px solid var(--accent);
+      outline: none;
+      border-color: var(--focus-border);
     }
     .search-input { flex: 1; }
     .item-list-container {
@@ -350,14 +425,15 @@ export class WorkbenchPanel {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      transition: border 0.15s, background 0.15s;
+      transition: border-color 0.15s ease, background 0.15s ease;
     }
     .list-card:hover {
-      border-color: #666;
+      border-color: #666666;
     }
     .list-card.selected {
       border-color: var(--accent);
-      background: rgba(0, 122, 204, 0.1);
+      background: rgba(0, 122, 204, 0.08);
+      border-left: 3px solid var(--accent);
     }
     .card-top {
       display: flex;
@@ -371,42 +447,63 @@ export class WorkbenchPanel {
       padding: 2px 6px;
       border-radius: 3px;
       text-transform: uppercase;
-      font-family: monospace;
+      font-family: var(--code-font);
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
     }
-    .tag-get { background: #007acc; color: #fff; }
-    .tag-post { background: #238636; color: #fff; }
-    .tag-put { background: #b08800; color: #fff; }
-    .tag-delete { background: #da3633; color: #fff; }
-    .tag-other { background: #6e7681; color: #fff; }
+    .tag-get { background: #007acc; color: #ffffff; }
+    .tag-post { background: #238636; color: #ffffff; }
+    .tag-put { background: #b08800; color: #ffffff; }
+    .tag-patch { background: #8957e5; color: #ffffff; }
+    .tag-delete { background: #da3633; color: #ffffff; }
+    .tag-other { background: #6e7681; color: #ffffff; }
+
     .path-text {
-      font-family: var(--vscode-editor-font-family, monospace);
+      font-family: var(--code-font);
       font-size: 12px;
       flex: 1;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      color: #e6edf3;
     }
     .status-code-tag {
-      font-weight: 600;
+      font-weight: 700;
       font-size: 11px;
+      font-family: var(--code-font);
+      padding: 1px 6px;
+      border-radius: 3px;
     }
+    .status-2xx { color: var(--success); background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63, 185, 80, 0.3); }
+    .status-3xx { color: #58a6ff; background: rgba(88, 166, 255, 0.1); border: 1px solid rgba(88, 166, 255, 0.3); }
+    .status-4xx { color: var(--warning); background: rgba(210, 153, 34, 0.1); border: 1px solid rgba(210, 153, 34, 0.3); }
+    .status-5xx { color: var(--danger); background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248, 81, 73, 0.3); }
+
     .card-sub {
       display: flex;
       justify-content: space-between;
       align-items: center;
       font-size: 11px;
-      color: #888;
+      color: var(--muted);
     }
-
     .type-tag {
       background: rgba(0, 122, 204, 0.15);
       color: #4fc1ff;
-      border: 1px solid rgba(79, 193, 255, 0.3);
+      border: 1px solid rgba(79, 193, 255, 0.25);
       padding: 1px 5px;
       border-radius: 3px;
-      font-family: monospace;
+      font-family: var(--code-font);
       font-size: 10px;
     }
+    .mock-status-pill {
+      font-size: 10px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .mock-status-pill.mocked { color: var(--success); }
+    .mock-status-pill.pass { color: var(--muted); }
 
     .right-pane {
       flex: 1;
@@ -416,27 +513,39 @@ export class WorkbenchPanel {
       background: var(--card-bg);
     }
     .inspector-header {
-      padding: 14px 20px;
+      padding: 12px 18px;
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
+      background: var(--card-bg);
+      gap: 12px;
+      flex-shrink: 0;
     }
     .inspector-title {
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 600;
       display: flex;
       align-items: center;
       gap: 10px;
+      min-width: 0;
+    }
+    .inspector-title span.path-display {
+      font-family: var(--code-font);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .inspector-actions {
       display: flex;
       gap: 8px;
+      align-items: center;
+      flex-shrink: 0;
     }
     .inspector-body {
       flex: 1;
       overflow-y: auto;
-      padding: 20px;
+      padding: 18px 20px;
       display: flex;
       flex-direction: column;
       gap: 16px;
@@ -454,14 +563,18 @@ export class WorkbenchPanel {
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      color: #999;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
     .json-editor {
-      font-family: var(--vscode-editor-font-family, monospace);
+      font-family: var(--code-font);
       font-size: 12px;
       min-height: 240px;
       resize: vertical;
-      line-height: 1.4;
+      line-height: 1.45;
       white-space: pre;
     }
     .empty-prompt {
@@ -470,71 +583,175 @@ export class WorkbenchPanel {
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      color: #777;
-      gap: 12px;
-      padding: 20px;
+      color: var(--muted);
+      gap: 14px;
+      padding: 30px;
       text-align: center;
+    }
+    .empty-icon-wrapper {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .feature-pills {
+      display: flex;
+      gap: 12px;
+      margin-top: 14px;
+      max-width: 600px;
+      text-align: left;
+    }
+    .feature-card {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .feature-card-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #ffffff;
+      font-size: 12px;
     }
     .tab-content-panel {
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 4px;
       padding: 12px;
-      font-family: monospace;
+      font-family: var(--code-font);
       font-size: 12px;
       max-height: 220px;
       overflow-y: auto;
       white-space: pre-wrap;
+      line-height: 1.45;
     }
     .banner-bar {
-      background: rgba(0, 122, 204, 0.15);
-      border: 1px solid rgba(0, 122, 204, 0.3);
+      background: rgba(0, 122, 204, 0.1);
+      border: 1px solid rgba(0, 122, 204, 0.25);
       padding: 10px 14px;
       border-radius: 4px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 6px;
+      font-size: 12px;
+    }
+    .info-callout {
+      background: rgba(0, 122, 204, 0.08);
+      border: 1px solid rgba(0, 122, 204, 0.25);
+      border-left: 3px solid var(--accent);
+      padding: 12px 14px;
+      border-radius: 4px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .section-headline {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      margin: 4px 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        transition: none !important;
+        animation: none !important;
+      }
     }
   </style>
 </head>
 <body>
   <header>
     <div class="brand">
-      <span>📡</span>
+      <div class="brand-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="2"></circle>
+          <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path>
+        </svg>
+      </div>
       <span>MockScope Workbench</span>
+      <span class="brand-tag">Air-Gapped</span>
     </div>
     <div class="top-controls">
-      <div>
-        <span id="proxyBadge" class="badge badge-offline">Proxy: OFF</span>
+      <div class="status-cluster">
+        <span id="proxyDot" class="status-dot offline"></span>
+        <span>Proxy: <strong id="proxyText">OFF</strong></span>
+        <button id="toggleProxyBtn" class="btn-compact" nonce="${nonce}">Start</button>
       </div>
-      <div>
-        <span id="cdpBadge" class="badge badge-offline">CDP: Detached</span>
+      <div class="status-cluster">
+        <span id="cdpDot" class="status-dot offline"></span>
+        <span>CDP: <strong id="cdpText">Detached</strong></span>
+        <button id="toggleCdpBtn" class="btn-compact" nonce="${nonce}">Attach</button>
       </div>
-      <button id="toggleProxyBtn" nonce="${nonce}">Toggle Proxy</button>
-      <button id="toggleCdpBtn" nonce="${nonce}" class="secondary">Toggle CDP</button>
-      <button id="scanBtn" class="secondary" nonce="${nonce}">🔍 Scan Codebase</button>
-      <button id="addMockBtn" nonce="${nonce}">+ New Mock Route</button>
+      <button id="scanBtn" nonce="${nonce}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <span>Scan Workspace</span>
+      </button>
+      <button id="addMockBtn" class="primary" nonce="${nonce}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span>New Mock Route</span>
+      </button>
     </div>
   </header>
 
   <div class="workbench-layout">
     <div class="left-pane">
       <div class="tab-bar">
-        <div id="tabDiscovered" class="tab active" nonce="${nonce}">🔍 Discovered (<span id="discoveredCount">0</span>)</div>
-        <div id="tabTraffic" class="tab" nonce="${nonce}">Live Traffic (<span id="trafficCount">0</span>)</div>
-        <div id="tabRoutes" class="tab" nonce="${nonce}">Mock Routes (<span id="routeCount">0</span>)</div>
+        <div id="tabDiscovered" class="tab active" nonce="${nonce}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <span>Discovered APIs</span>
+          <span id="discoveredCount" class="tab-count">0</span>
+        </div>
+        <div id="tabTraffic" class="tab" nonce="${nonce}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+          </svg>
+          <span>Live Traffic</span>
+          <span id="trafficCount" class="tab-count">0</span>
+        </div>
+        <div id="tabRoutes" class="tab" nonce="${nonce}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+          <span>Mock Routes</span>
+          <span id="routeCount" class="tab-count">0</span>
+        </div>
       </div>
       <div class="filter-bar">
-        <input type="text" id="filterInput" class="search-input" placeholder="Search URL path..." nonce="${nonce}">
+        <input type="text" id="filterInput" class="search-input" placeholder="Filter endpoints..." nonce="${nonce}">
         <select id="methodFilter" nonce="${nonce}">
           <option value="ALL">All Methods</option>
           <option value="GET">GET</option>
           <option value="POST">POST</option>
           <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
           <option value="DELETE">DELETE</option>
         </select>
-        <button id="clearBtn" class="secondary" nonce="${nonce}" title="Clear list">Clear</button>
+        <button id="clearBtn" class="btn-compact" nonce="${nonce}" title="Clear list or search">Clear</button>
       </div>
       <div id="itemList" class="item-list-container">
         <!-- Rendered dynamically -->
@@ -542,16 +759,29 @@ export class WorkbenchPanel {
     </div>
 
     <div id="rightPane" class="right-pane">
-      <div class="empty-prompt">
-        <span style="font-size: 42px;">🔍</span>
-        <span style="font-size: 16px; font-weight: 600;">Automated API Discovery</span>
-        <span>MockScope automatically scans your codebase for <code>fetch</code>, <code>axios</code>, and <code>useQuery</code> calls.<br>Select any discovered API on the left or click "Auto-Mock All" to generate realistic data instantly!</span>
-      </div>
+      <!-- Rendered dynamically -->
     </div>
   </div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+
+    const ICONS = {
+      search: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
+      plus: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
+      check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+      copy: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
+      trash: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>',
+      play: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>',
+      square: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>',
+      save: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>',
+      radar: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg>',
+      layers: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>',
+      activity: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>',
+      wand: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 21 9-9"></path><path d="M12.2 6.2 11 5"></path><path d="M15 4V2"></path><path d="M15 16v-2"></path><path d="M8 9h2"></path><path d="M20 9h2"></path><path d="M17.8 11.8 19 13"></path><path d="M17.8 6.2 19 5"></path></svg>',
+      code: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>',
+      external: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>',
+    };
 
     let state = {
       proxy: { running: false, port: 45990 },
@@ -651,27 +881,41 @@ export class WorkbenchPanel {
 
     vscode.postMessage({ type: 'ready' });
 
+    function copyWithFeedback(buttonElement, textToCopy, label) {
+      if (!buttonElement) return;
+      vscode.postMessage({ type: 'copyText', text: textToCopy, label });
+      const originalHtml = buttonElement.innerHTML;
+      buttonElement.innerHTML = ICONS.check + ' <span>Copied!</span>';
+      buttonElement.classList.add('btn-success');
+      setTimeout(() => {
+        buttonElement.innerHTML = originalHtml;
+        buttonElement.classList.remove('btn-success');
+      }, 1800);
+    }
+
     function render() {
-      const proxyBadge = document.getElementById('proxyBadge');
+      const proxyDot = document.getElementById('proxyDot');
+      const proxyText = document.getElementById('proxyText');
       if (state.proxy.running) {
-        proxyBadge.textContent = 'Proxy: 127.0.0.1:' + state.proxy.port;
-        proxyBadge.className = 'badge badge-online';
-        toggleProxyBtn.textContent = 'Stop Proxy';
+        proxyText.textContent = '127.0.0.1:' + state.proxy.port;
+        proxyDot.className = 'status-dot online';
+        toggleProxyBtn.textContent = 'Stop';
       } else {
-        proxyBadge.textContent = 'Proxy: OFF';
-        proxyBadge.className = 'badge badge-offline';
-        toggleProxyBtn.textContent = 'Start Proxy';
+        proxyText.textContent = 'OFF';
+        proxyDot.className = 'status-dot offline';
+        toggleProxyBtn.textContent = 'Start';
       }
 
-      const cdpBadge = document.getElementById('cdpBadge');
+      const cdpDot = document.getElementById('cdpDot');
+      const cdpText = document.getElementById('cdpText');
       if (state.cdp.attached) {
-        cdpBadge.textContent = 'CDP: Attached (' + state.cdp.port + ')';
-        cdpBadge.className = 'badge badge-online';
-        toggleCdpBtn.textContent = 'Detach CDP';
+        cdpText.textContent = 'Port ' + state.cdp.port;
+        cdpDot.className = 'status-dot online';
+        toggleCdpBtn.textContent = 'Detach';
       } else {
-        cdpBadge.textContent = 'CDP: Detached';
-        cdpBadge.className = 'badge badge-offline';
-        toggleCdpBtn.textContent = 'Attach CDP';
+        cdpText.textContent = 'Detached';
+        cdpDot.className = 'status-dot offline';
+        toggleCdpBtn.textContent = 'Attach';
       }
 
       document.getElementById('discoveredCount').textContent = (state.discoveredCalls || []).length;
@@ -686,9 +930,17 @@ export class WorkbenchPanel {
       const m = (method || '').toLowerCase();
       if (m === 'get') return 'tag-get';
       if (m === 'post') return 'tag-post';
-      if (m === 'put' || m === 'patch') return 'tag-put';
+      if (m === 'put') return 'tag-put';
+      if (m === 'patch') return 'tag-patch';
       if (m === 'delete') return 'tag-delete';
       return 'tag-other';
+    }
+
+    function getStatusClass(code) {
+      if (code >= 200 && code < 300) return 'status-2xx';
+      if (code >= 300 && code < 400) return 'status-3xx';
+      if (code >= 400 && code < 500) return 'status-4xx';
+      return 'status-5xx';
     }
 
     function renderList() {
@@ -707,7 +959,10 @@ export class WorkbenchPanel {
           banner.className = 'banner-bar';
           banner.innerHTML = \`
             <span><strong>\${calls.length}</strong> API calls discovered in project</span>
-            <button id="mockAllBtn" class="accent" nonce="${nonce}">⚡ Auto-Mock All</button>
+            <button id="mockAllBtn" class="accent btn-compact" nonce="${nonce}">
+              \${ICONS.wand}
+              <span>Auto-Mock All</span>
+            </button>
           \`;
           itemList.appendChild(banner);
 
@@ -718,10 +973,20 @@ export class WorkbenchPanel {
 
         if (filtered.length === 0) {
           const empty = document.createElement('div');
-          empty.style.color = '#888';
-          empty.style.textAlign = 'center';
-          empty.style.padding = '24px';
-          empty.innerHTML = 'No API calls detected yet. Click "🔍 Scan Codebase" above.';
+          empty.className = 'empty-prompt';
+          empty.style.padding = '30px 10px';
+          empty.innerHTML = \`
+            <div class="empty-icon-wrapper">\${ICONS.radar}</div>
+            <strong style="color: #fff;">No API calls detected yet</strong>
+            <span style="max-width: 280px; font-size: 11px;">MockScope automatically scans fetch, axios, and useQuery endpoints across your workspace.</span>
+            <button id="emptyScanBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
+              \${ICONS.search}
+              <span>Scan Workspace</span>
+            </button>
+          \`;
+          empty.querySelector('#emptyScanBtn').addEventListener('click', () => {
+            vscode.postMessage({ type: 'scanWorkspace' });
+          });
           itemList.appendChild(empty);
           return;
         }
@@ -740,7 +1005,10 @@ export class WorkbenchPanel {
             </div>
             <div class="card-sub">
               <span>\${call.clientType} in \${filename}</span>
-              \${isAlreadyMocked ? '<span style="color: var(--success); font-weight:600;">✓ Mock Active</span>' : '<button class="mini-mock-btn" style="padding:2px 8px; font-size:10px;">⚡ Mock</button>'}
+              \${isAlreadyMocked 
+                ? \`<span class="mock-status-pill mocked">\${ICONS.check} Active Mock</span>\` 
+                : \`<button class="mini-mock-btn btn-compact" style="padding: 2px 7px;">\${ICONS.plus} Mock</button>\`
+              }
             </div>
           \`;
 
@@ -766,7 +1034,15 @@ export class WorkbenchPanel {
         });
 
         if (filtered.length === 0) {
-          itemList.innerHTML = '<div style="color: #888; text-align: center; padding: 24px;">No traffic recorded yet. Make a request via proxy or browser.</div>';
+          const empty = document.createElement('div');
+          empty.className = 'empty-prompt';
+          empty.style.padding = '30px 10px';
+          empty.innerHTML = \`
+            <div class="empty-icon-wrapper">\${ICONS.activity}</div>
+            <strong style="color: #fff;">No traffic recorded yet</strong>
+            <span style="max-width: 280px; font-size: 11px;">Make a request via proxy (127.0.0.1:45990) or attach CDP to record real-time requests.</span>
+          \`;
+          itemList.appendChild(empty);
           return;
         }
 
@@ -777,10 +1053,10 @@ export class WorkbenchPanel {
             <div class="card-top">
               <span class="method-tag \${getMethodTagClass(t.method)}">\${t.method}</span>
               <span class="path-text" title="\${t.url}">\${t.url}</span>
-              <span class="status-code-tag" style="color: \${t.statusCode < 400 ? 'var(--success)' : 'var(--danger)'}">\${t.statusCode}</span>
+              <span class="status-code-tag \${getStatusClass(t.statusCode)}">\${t.statusCode}</span>
             </div>
             <div class="card-sub">
-              <span>\${t.isMocked ? '⚡ Mocked' : '🌐 Passthrough'}</span>
+              <span class="mock-status-pill \${t.isMocked ? 'mocked' : 'pass'}">\${t.isMocked ? 'Mocked' : 'Passthrough'}</span>
               <span>\${t.durationMs}ms</span>
             </div>
           \`;
@@ -798,7 +1074,23 @@ export class WorkbenchPanel {
         });
 
         if (filtered.length === 0 && selectedId !== 'NEW_ROUTE') {
-          itemList.innerHTML = '<div style="color: #888; text-align: center; padding: 24px;">No mock routes. Click "+ New Mock Route" to create one.</div>';
+          const empty = document.createElement('div');
+          empty.className = 'empty-prompt';
+          empty.style.padding = '30px 10px';
+          empty.innerHTML = \`
+            <div class="empty-icon-wrapper">\${ICONS.layers}</div>
+            <strong style="color: #fff;">No mock routes active</strong>
+            <span style="max-width: 280px; font-size: 11px;">Configure mock endpoints or auto-mock from the Discovered APIs tab.</span>
+            <button id="emptyCreateBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
+              \${ICONS.plus}
+              <span>New Mock Route</span>
+            </button>
+          \`;
+          empty.querySelector('#emptyCreateBtn').addEventListener('click', () => {
+            selectedId = 'NEW_ROUTE';
+            render();
+          });
+          itemList.appendChild(empty);
           return;
         }
 
@@ -809,10 +1101,13 @@ export class WorkbenchPanel {
             <div class="card-top">
               <span class="method-tag \${getMethodTagClass(r.method)}">\${r.method}</span>
               <span class="path-text" title="\${r.urlPattern}">\${r.urlPattern}</span>
-              <span class="status-code-tag">\${r.statusCode}</span>
+              <span class="status-code-tag \${getStatusClass(r.statusCode)}">\${r.statusCode}</span>
             </div>
             <div class="card-sub">
-              <span>\${r.enabled ? '🟢 Enabled' : '⚪ Disabled'}</span>
+              <span style="display: flex; align-items: center; gap: 5px;">
+                <span class="status-dot \${r.enabled ? 'online' : 'offline'}"></span>
+                <span>\${r.enabled ? 'Active' : 'Disabled'}</span>
+              </span>
               <span>\${r.delayMs ? r.delayMs + 'ms delay' : 'Instant'}</span>
             </div>
           \`;
@@ -829,8 +1124,23 @@ export class WorkbenchPanel {
       if (!selectedId) {
         rightPane.innerHTML = \`
           <div class="empty-prompt">
-            <span style="font-size: 36px;">🎯</span>
-            <span>Select an item on the left to inspect, edit, or auto-mock.</span>
+            <div class="empty-icon-wrapper">\${ICONS.radar}</div>
+            <h2 style="margin: 0; color: #fff; font-size: 18px; font-weight: 600;">MockScope Workbench</h2>
+            <span style="font-size: 13px; color: var(--muted); max-width: 440px;">Select an endpoint on the left to inspect, configure mock responses, or export test handlers.</span>
+            <div class="feature-pills">
+              <div class="feature-card">
+                <div class="feature-card-header">\${ICONS.wand} <strong>Type Synthesis</strong></div>
+                <span>Infers schemas and generates mock payloads directly from TypeScript return types</span>
+              </div>
+              <div class="feature-card">
+                <div class="feature-card-header">\${ICONS.activity} <strong>Loopback Proxy</strong></div>
+                <span>Intercepts traffic on 127.0.0.1 with in-memory credential redaction</span>
+              </div>
+              <div class="feature-card">
+                <div class="feature-card-header">\${ICONS.code} <strong>Test Exporter</strong></div>
+                <span>1-click generation of native Playwright page.route() and MSW v2 handlers</span>
+              </div>
+            </div>
           </div>
         \`;
         return;
@@ -839,43 +1149,54 @@ export class WorkbenchPanel {
       if (activeTab === 'discovered') {
         const call = (state.discoveredCalls || []).find(c => c.id === selectedId);
         if (!call) return;
-
-        const isMockActive = state.routes.some(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
+        const isAlreadyMocked = state.routes.some(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
 
         rightPane.innerHTML = \`
           <div class="inspector-header">
             <div class="inspector-title">
               <span class="method-tag \${getMethodTagClass(call.method)}">\${call.method}</span>
-              <span>\${call.url}</span>
+              <span class="path-display" title="\${call.url}">\${call.url}</span>
             </div>
             <div class="inspector-actions">
-              <button id="inspectMockBtn" class="accent" nonce="${nonce}">⚡ Auto-Generate Mock Now</button>
+              \${isAlreadyMocked ? \`
+                <button id="openDiscoveredInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
+                  \${ICONS.external}
+                  <span>Open in Browser</span>
+                </button>
+              \` : ''}
+              <button id="inspectMockBtn" class="accent" nonce="${nonce}">
+                \${ICONS.wand}
+                <span>Auto-Synthesize Mock</span>
+              </button>
             </div>
           </div>
           <div class="inspector-body">
             <div class="form-row">
               <div class="form-group" style="flex: 1;">
-                <label>Client Type</label>
+                <label>HTTP Client</label>
                 <input type="text" readonly value="\${call.clientType}">
               </div>
               <div class="form-group" style="flex: 1;">
-                <label>TypeScript Return Generic</label>
+                <label>TypeScript Generic Return Type</label>
                 <input type="text" readonly value="\${call.typeArgument || 'None (auto-inferred)'}">
               </div>
             </div>
 
             <div class="form-group">
               <label>Source Code Location</label>
-              <input type="text" readonly value="\${call.fileName || 'file.ts'} (Line \${call.range.start.line + 1})">
+              <input type="text" readonly value="\${call.fileName || 'source.ts'} (Line \${call.range.start.line + 1})">
             </div>
 
             <div class="form-group">
-              <label>Detected Expression in Code</label>
+              <label>
+                <span>Detected Expression in Source</span>
+                <button id="copyExprBtn" class="btn-compact" nonce="${nonce}" title="Copy code expression">\${ICONS.copy} Copy</button>
+              </label>
               <div class="tab-content-panel">\${call.rawExpression}</div>
             </div>
 
-            <div style="background: rgba(0, 122, 204, 0.1); border: 1px solid var(--accent); padding: 14px; border-radius: 4px;">
-              <strong>Auto-Synthesis Guarantee:</strong> MockScope analyzes this call site's TypeScript type <code>&lt;\${call.typeArgument || 'Object'}&gt;</code> and generates matching realistic data without any manual schema typing.
+            <div class="info-callout">
+              <strong>Zero-Configuration Mock Guarantee:</strong> MockScope analyzes this call site's TypeScript type <code>&lt;\${call.typeArgument || 'Object'}&gt;</code> and generates matching realistic data deterministically without requiring manual schema definitions.
             </div>
           </div>
         \`;
@@ -888,6 +1209,20 @@ export class WorkbenchPanel {
           tabTraffic.classList.remove('active');
           render();
         });
+
+        const openDiscoveredInBrowserBtn = document.getElementById('openDiscoveredInBrowserBtn');
+        if (openDiscoveredInBrowserBtn) {
+          openDiscoveredInBrowserBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'openEndpointInBrowser', url: call.url });
+          });
+        }
+
+        const copyExprBtn = document.getElementById('copyExprBtn');
+        if (copyExprBtn) {
+          copyExprBtn.addEventListener('click', () => {
+            copyWithFeedback(copyExprBtn, call.rawExpression, 'code expression');
+          });
+        }
       } else if (activeTab === 'traffic') {
         const item = state.traffic.find(t => t.id === selectedId);
         if (!item) return;
@@ -896,26 +1231,37 @@ export class WorkbenchPanel {
           <div class="inspector-header">
             <div class="inspector-title">
               <span class="method-tag \${getMethodTagClass(item.method)}">\${item.method}</span>
-              <span>\${item.url}</span>
+              <span class="path-display" title="\${item.url}">\${item.url}</span>
+              <span class="status-code-tag \${getStatusClass(item.statusCode)}">\${item.statusCode}</span>
             </div>
             <div class="inspector-actions">
-              <button id="promoteMockBtn" nonce="${nonce}">⚡ Convert to Mock Route</button>
+              <button id="openTrafficInBrowserBtn" nonce="${nonce}" title="Preview endpoint in browser">
+                \${ICONS.external}
+                <span>Open in Browser</span>
+              </button>
+              <button id="promoteMockBtn" class="primary" nonce="${nonce}">
+                \${ICONS.plus}
+                <span>Convert to Mock Route</span>
+              </button>
             </div>
           </div>
           <div class="inspector-body">
             <div class="form-row">
               <div class="form-group" style="flex: 1;">
-                <label>Status Code</label>
+                <label>Status & Latency</label>
                 <input type="text" readonly value="\${item.statusCode} (\${item.durationMs}ms)">
               </div>
               <div class="form-group" style="flex: 1;">
-                <label>Type</label>
-                <input type="text" readonly value="\${item.isMocked ? 'Mocked Response' : 'Upstream Response'}">
+                <label>Interception Mode</label>
+                <input type="text" readonly value="\${item.isMocked ? 'Mocked Response' : 'Upstream Passthrough'}">
               </div>
             </div>
 
             <div class="form-group">
-              <label>Request Headers (Credentials Redacted)</label>
+              <label>
+                <span>Request Headers (Sanitized)</span>
+                <button id="copyReqHdrBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
+              </label>
               <div class="tab-content-panel">\${JSON.stringify(item.requestHeaders, null, 2)}</div>
             </div>
 
@@ -932,11 +1278,35 @@ export class WorkbenchPanel {
             </div>
 
             <div class="form-group">
-              <label>Response Body</label>
-              <div class="tab-content-panel">\${item.responseBody || '(empty)'}</div>
+              <label>
+                <span>Response Body</span>
+                <button id="copyResBodyBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
+              </label>
+              <div class="tab-content-panel">\${item.responseBody || '(empty body)'}</div>
             </div>
           </div>
         \`;
+
+        const copyReqHdrBtn = document.getElementById('copyReqHdrBtn');
+        if (copyReqHdrBtn) {
+          copyReqHdrBtn.addEventListener('click', () => {
+            copyWithFeedback(copyReqHdrBtn, JSON.stringify(item.requestHeaders, null, 2), 'Request Headers');
+          });
+        }
+
+        const copyResBodyBtn = document.getElementById('copyResBodyBtn');
+        if (copyResBodyBtn) {
+          copyResBodyBtn.addEventListener('click', () => {
+            copyWithFeedback(copyResBodyBtn, item.responseBody || '', 'Response Body');
+          });
+        }
+
+        const openTrafficInBrowserBtn = document.getElementById('openTrafficInBrowserBtn');
+        if (openTrafficInBrowserBtn) {
+          openTrafficInBrowserBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'openEndpointInBrowser', url: item.url });
+          });
+        }
 
         document.getElementById('promoteMockBtn').addEventListener('click', () => {
           let bodyParsed;
@@ -968,7 +1338,7 @@ export class WorkbenchPanel {
         });
       } else {
         let route = selectedId === 'NEW_ROUTE'
-          ? { id: 'route_' + Date.now(), method: 'GET', urlPattern: '/api/v1/resource', statusCode: 200, delayMs: 0, body: { message: 'Sample mock' }, enabled: true }
+          ? { id: 'route_' + Date.now(), method: 'GET', urlPattern: '/api/v1/resource', statusCode: 200, delayMs: 0, body: { message: 'Sample mock response' }, enabled: true }
           : state.routes.find(r => r.id === selectedId);
 
         if (!route) return;
@@ -978,15 +1348,32 @@ export class WorkbenchPanel {
         rightPane.innerHTML = \`
           <div class="inspector-header">
             <div class="inspector-title">
-              <span>\${selectedId === 'NEW_ROUTE' ? '✨ Create New Mock Route' : '✏️ Edit Mock Route'}</span>
+              <span class="method-tag \${getMethodTagClass(route.method)}">\${route.method}</span>
+              <span>\${selectedId === 'NEW_ROUTE' ? 'Create New Mock Route' : 'Edit Mock Route'}</span>
             </div>
             <div class="inspector-actions">
               \${selectedId !== 'NEW_ROUTE' ? \`
-                <button id="copyPlaywrightBtn" class="secondary" nonce="${nonce}">Copy Playwright</button>
-                <button id="copyMswBtn" class="secondary" nonce="${nonce}">Copy MSW</button>
-                <button id="deleteRouteBtn" class="secondary danger" nonce="${nonce}">Delete</button>
+                <button id="openInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
+                  \${ICONS.external}
+                  <span>Open in Browser</span>
+                </button>
+                <button id="copyPlaywrightBtn" nonce="${nonce}">
+                  \${ICONS.copy}
+                  <span>Playwright</span>
+                </button>
+                <button id="copyMswBtn" nonce="${nonce}">
+                  \${ICONS.copy}
+                  <span>MSW v2</span>
+                </button>
+                <button id="deleteRouteBtn" class="danger" nonce="${nonce}">
+                  \${ICONS.trash}
+                  <span>Delete</span>
+                </button>
               \` : ''}
-              <button id="saveRouteBtn" nonce="${nonce}">💾 Save Mock Route</button>
+              <button id="saveRouteBtn" class="primary" nonce="${nonce}">
+                \${ICONS.save}
+                <span>Save Route</span>
+              </button>
             </div>
           </div>
           <div class="inspector-body">
@@ -1003,7 +1390,7 @@ export class WorkbenchPanel {
                 </select>
               </div>
               <div class="form-group" style="flex: 1;">
-                <label>URL Pattern (supports wildcards /api/* and :id)</label>
+                <label>URL Pattern (supports wildcards * and :param)</label>
                 <input type="text" id="editUrlPattern" value="\${route.urlPattern}" nonce="${nonce}">
               </div>
             </div>
@@ -1022,17 +1409,32 @@ export class WorkbenchPanel {
                 </select>
               </div>
               <div class="form-group" style="flex: 1;">
-                <label>Artificial Latency (ms)</label>
+                <label>Simulated Latency (ms)</label>
                 <input type="text" id="editDelayMs" value="\${route.delayMs || 0}" nonce="${nonce}">
               </div>
             </div>
 
             <div class="form-group">
-              <label>Response Body (JSON or Text)</label>
+              <label>
+                <span>Response Body (JSON or Plain Text)</span>
+                <button id="formatJsonBtn" class="btn-compact" nonce="${nonce}">Format JSON</button>
+              </label>
               <textarea id="editBody" class="json-editor" nonce="${nonce}">\${bodyStr}</textarea>
             </div>
           </div>
         \`;
+
+        const formatBtn = document.getElementById('formatJsonBtn');
+        if (formatBtn) {
+          formatBtn.addEventListener('click', () => {
+            const bodyEl = document.getElementById('editBody');
+            try {
+              const parsed = JSON.parse(bodyEl.value);
+              bodyEl.value = JSON.stringify(parsed, null, 2);
+            } catch {
+            }
+          });
+        }
 
         document.getElementById('saveRouteBtn').addEventListener('click', () => {
           const method = document.getElementById('editMethod').value;
@@ -1067,31 +1469,44 @@ export class WorkbenchPanel {
         });
 
         if (selectedId !== 'NEW_ROUTE') {
+          const openInBrowserBtn = document.getElementById('openInBrowserBtn');
+          if (openInBrowserBtn) {
+            openInBrowserBtn.addEventListener('click', () => {
+              vscode.postMessage({ type: 'openEndpointInBrowser', url: route.urlPattern });
+            });
+          }
+
           document.getElementById('deleteRouteBtn').addEventListener('click', () => {
             vscode.postMessage({ type: 'deleteRoute', routeId: route.id });
             selectedId = null;
             render();
           });
 
-          document.getElementById('copyPlaywrightBtn').addEventListener('click', () => {
-            const spec = \`await page.route('**\${route.urlPattern}', async (route) => {
+          const copyPlaywrightBtn = document.getElementById('copyPlaywrightBtn');
+          if (copyPlaywrightBtn) {
+            copyPlaywrightBtn.addEventListener('click', () => {
+              const spec = \`await page.route('**\${route.urlPattern}', async (route) => {
   await route.fulfill({
     status: \${route.statusCode},
     contentType: 'application/json',
     body: JSON.stringify(\${bodyStr}, null, 2),
   });
 });\`;
-            vscode.postMessage({ type: 'copyText', text: spec, label: 'Playwright spec' });
-          });
+              copyWithFeedback(copyPlaywrightBtn, spec, 'Playwright spec');
+            });
+          }
 
-          document.getElementById('copyMswBtn').addEventListener('click', () => {
-            const m = (route.method || 'get').toLowerCase();
-            const fn = ['get', 'post', 'put', 'patch', 'delete'].includes(m) ? m : 'all';
-            const handler = \`http.\${fn}('\${route.urlPattern}', () => {
+          const copyMswBtn = document.getElementById('copyMswBtn');
+          if (copyMswBtn) {
+            copyMswBtn.addEventListener('click', () => {
+              const m = (route.method || 'get').toLowerCase();
+              const fn = ['get', 'post', 'put', 'patch', 'delete'].includes(m) ? m : 'all';
+              const handler = \`http.\${fn}('\${route.urlPattern}', () => {
   return HttpResponse.json(\${bodyStr}, { status: \${route.statusCode} });
 });\`;
-            vscode.postMessage({ type: 'copyText', text: handler, label: 'MSW v2 handler' });
-          });
+              copyWithFeedback(copyMswBtn, handler, 'MSW v2 handler');
+            });
+          }
         }
       }
     }

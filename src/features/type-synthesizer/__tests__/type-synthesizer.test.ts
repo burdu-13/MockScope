@@ -145,4 +145,59 @@ describe('type-synthesizer', () => {
     const fallbackVariants = generateMockVariants();
     expect(fallbackVariants.ok200.statusCode).toBe(200);
   });
+
+  it('should synthesize inline object literals such as { results: SearchResultItem[] }', () => {
+    const code = `
+      export interface SearchResultItem {
+        id: number;
+        title: string;
+        overview: string;
+        poster_path: string;
+        vote_average: number;
+      }
+    `;
+
+    const result = synthesizePayload('{ results: SearchResultItem[] }', null, code);
+    expect(result.statusCode).toBe(200);
+    const body = result.body as any;
+    expect(body).toHaveProperty('results');
+    expect(Array.isArray(body.results)).toBe(true);
+    expect(body.results).toHaveLength(1);
+
+    const item = body.results[0];
+    expect(item.id).toBe(101);
+    expect(item.title).toBe('Senior Software Architect');
+    expect(item.overview).toBe('High-performance engineering and low-latency systems.');
+    expect(item.poster_path).toBe('/sample_poster_path.jpg');
+    expect(item.vote_average).toBe(8.4);
+  });
+
+  it('should synthesize interface inheritance (extends) and intersection types (&)', () => {
+    const code = `
+      interface MediaBase {
+        id: number;
+        popularity: number;
+      }
+
+      interface MovieDetails extends MediaBase {
+        title: string;
+        tagline: string;
+      }
+
+      type TaggedMovie = MovieDetails & { media_type: 'movie'; adult: boolean };
+    `;
+
+    const movieResult = synthesizePayload('MovieDetails', null, code);
+    const movieBody = movieResult.body as any;
+    expect(movieBody.id).toBe(101);
+    expect(movieBody.title).toBe('Senior Software Architect');
+    expect(movieBody.popularity).toBe(42);
+
+    const taggedResult = synthesizePayload('TaggedMovie', null, code);
+    const taggedBody = taggedResult.body as any;
+    expect(taggedBody.id).toBe(101);
+    expect(taggedBody.media_type).toBe('movie');
+    expect(taggedBody.adult).toBe(false);
+  });
 });
+

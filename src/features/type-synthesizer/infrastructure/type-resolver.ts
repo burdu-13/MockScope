@@ -1,4 +1,6 @@
 import * as ts from 'typescript';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 import type { GeneratedMock } from '../../../shared/kernel/index';
 import { synthesizeStringValue, synthesizeNumberValue, synthesizeBooleanValue } from '../domain/heuristics';
 
@@ -37,14 +39,22 @@ export interface SynthesisOptions {
 
 export class TypeSynthesizerEngine {
   private readonly typeDeclarations: Map<string, ts.InterfaceDeclaration | ts.TypeAliasDeclaration | ts.EnumDeclaration> = new Map();
+  private readonly importPaths: Map<string, { specifier: string; sourceFilePath?: string }> = new Map();
+  private readonly visitedFiles: Set<string> = new Set();
+  private readonly currentFilePath?: string;
 
-  constructor(sourceCode?: string) {
+  constructor(sourceCode?: string, currentFilePath?: string) {
+    this.currentFilePath = currentFilePath;
     if (sourceCode) {
-      this.indexDeclarations(sourceCode);
+      this.indexDeclarations(sourceCode, currentFilePath);
     }
   }
 
-  public indexDeclarations(sourceCode: string): void {
+  public indexDeclarations(sourceCode: string, filePath?: string): void {
+    if (filePath) {
+      this.visitedFiles.add(path.normalize(filePath));
+    }
+
     const sourceFile = ts.createSourceFile('types.ts', sourceCode, ts.ScriptTarget.Latest, true);
 
     const visit = (node: ts.Node) => {
@@ -54,6 +64,13 @@ export class TypeSynthesizerEngine {
         this.typeDeclarations.set(node.name.text, node);
       } else if (ts.isEnumDeclaration(node)) {
         this.typeDeclarations.set(node.name.text, node);
+      } else if (ts.isImportDeclaration(node)) {
+        const specifier = ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
+        if (specifier && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings)) {
+          for (const el of node.importClause.namedBindings.elements) {
+            this.importPaths.set(el.name.text, { specifier, sourceFilePath: filePath });
+          }
+        }
       }
       ts.forEachChild(node, visit);
     };
@@ -61,17 +78,62 @@ export class TypeSynthesizerEngine {
     visit(sourceFile);
   }
 
+  private resolveImportedDeclaration(typeName: string): void {
+    const importInfo = this.importPaths.get(typeName);
+    const sourceFilePath = importInfo?.sourceFilePath || this.currentFilePath;
+    if (!importInfo || !sourceFilePath) return;
+
+    const specifier = importInfo.specifier;
+    if (!specifier.startsWith('.')) return; // Only traverse relative workspace imports
+
+    try {
+      const baseDir = path.dirname(sourceFilePath);
+      const targetBase = path.resolve(baseDir, specifier);
+      const candidates = [
+        targetBase + '.ts',
+        targetBase + '.tsx',
+        targetBase + '.d.ts',
+        path.join(targetBase, 'index.ts'),
+        path.join(targetBase, 'index.d.ts'),
+        targetBase,
+      ];
+
+      for (const candidate of candidates) {
+        const normalized = path.normalize(candidate);
+        if (this.visitedFiles.has(normalized)) continue;
+
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          const content = fs.readFileSync(candidate, 'utf8');
+          this.indexDeclarations(content, candidate);
+          break;
+        }
+      }
+    } catch {
+    }
+  }
+
   public synthesize(
     typeName: string,
-    options: SynthesisOptions = { depth: 0, maxDepth: 3, visitedCounts: new Map() }
+    options: SynthesisOptions = { depth: 0, maxDepth: 4, visitedCounts: new Map() }
   ): unknown {
     const cleanType = unwrapTypeWrappers(typeName);
+    const trimmed = cleanType.trim();
     const depth = options.depth ?? 0;
-    const maxDepth = options.maxDepth ?? 3;
+    const maxDepth = options.maxDepth ?? 4;
     const visitedCounts = new Map(options.visitedCounts ?? []);
 
     if (depth >= maxDepth) {
       return {};
+    }
+
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      const tempSource = `type __TempInlineType = ${trimmed};`;
+      const tempFile = ts.createSourceFile('inline.ts', tempSource, ts.ScriptTarget.Latest, true);
+      for (const statement of tempFile.statements) {
+        if (ts.isTypeAliasDeclaration(statement) && statement.type) {
+          return this.synthesizeTypeNode(statement.type, { depth, maxDepth, visitedCounts }, 'root');
+        }
+      }
     }
 
     if (cleanType.endsWith('[]')) {
@@ -95,6 +157,10 @@ export class TypeSynthesizerEngine {
     const count = visitedCounts.get(cleanType) || 0;
     if (count >= 2) {
       return {};
+    }
+
+    if (!this.typeDeclarations.has(cleanType)) {
+      this.resolveImportedDeclaration(cleanType);
     }
 
     const decl = this.typeDeclarations.get(cleanType);
@@ -136,6 +202,20 @@ export class TypeSynthesizerEngine {
 
   private synthesizeInterface(decl: ts.InterfaceDeclaration, options: SynthesisOptions): Record<string, unknown> {
     const result: Record<string, unknown> = {};
+
+    if (decl.heritageClauses) {
+      for (const clause of decl.heritageClauses) {
+        if (clause.token === ts.SyntaxKind.ExtendsKeyword) {
+          for (const typeRef of clause.types) {
+            const inheritedName = typeRef.expression.getText();
+            const inherited = this.synthesize(inheritedName, options);
+            if (inherited && typeof inherited === 'object' && !Array.isArray(inherited)) {
+              Object.assign(result, inherited);
+            }
+          }
+        }
+      }
+    }
 
     for (const member of decl.members) {
       if (ts.isPropertySignature(member) && member.name) {
@@ -183,19 +263,33 @@ export class TypeSynthesizerEngine {
       return obj;
     }
 
-    if (ts.isUnionTypeNode(typeNode)) {
-      const firstType = typeNode.types[0];
-      if (firstType && ts.isLiteralTypeNode(firstType)) {
-        if (ts.isStringLiteral(firstType.literal)) {
-          return firstType.literal.text;
-        }
-        if (ts.isNumericLiteral(firstType.literal)) {
-          return Number(firstType.literal.text);
+    if (ts.isIntersectionTypeNode(typeNode)) {
+      const merged: Record<string, unknown> = {};
+      for (const subType of typeNode.types) {
+        const val = this.synthesizeTypeNode(subType, options, fieldName);
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          Object.assign(merged, val);
         }
       }
+      return merged;
+    }
+
+    if (ts.isUnionTypeNode(typeNode)) {
+      const firstType = typeNode.types[0];
       if (firstType) {
         return this.synthesizeTypeNode(firstType, options, fieldName);
       }
+    }
+
+    if (ts.isLiteralTypeNode(typeNode)) {
+      if (ts.isStringLiteral(typeNode.literal)) {
+        return typeNode.literal.text;
+      }
+      if (ts.isNumericLiteral(typeNode.literal)) {
+        return Number(typeNode.literal.text);
+      }
+      if (typeNode.literal.kind === ts.SyntaxKind.TrueKeyword) return true;
+      if (typeNode.literal.kind === ts.SyntaxKind.FalseKeyword) return false;
     }
 
     return synthesizeStringValue(fieldName);
@@ -205,9 +299,10 @@ export class TypeSynthesizerEngine {
 export function synthesizePayload(
   typeName: string,
   _typeChecker?: ts.TypeChecker | null,
-  sourceCode?: string
+  sourceCode?: string,
+  filePath?: string
 ): GeneratedMock {
-  const engine = new TypeSynthesizerEngine(sourceCode);
+  const engine = new TypeSynthesizerEngine(sourceCode, filePath);
   const cleanType = unwrapTypeWrappers(typeName);
   const body = engine.synthesize(cleanType);
 
@@ -224,10 +319,11 @@ export function synthesizePayload(
 export function generateMockVariants(
   typeName?: string,
   typeChecker?: ts.TypeChecker | null,
-  sourceCode?: string
+  sourceCode?: string,
+  filePath?: string
 ): Record<'ok200' | 'bad400' | 'server500' | 'empty204', GeneratedMock> {
   const ok200 = typeName
-    ? synthesizePayload(typeName, typeChecker, sourceCode)
+    ? synthesizePayload(typeName, typeChecker, sourceCode, filePath)
     : {
         statusCode: 200,
         statusText: 'OK',

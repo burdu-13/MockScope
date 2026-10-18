@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import {
   globalEventBus,
+  assertLoopbackHost,
   type DetectedApiCall,
   type MockRoute,
 } from '../shared/kernel/index';
@@ -99,7 +100,7 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch {
       }
     }
-    const variants = generateMockVariants(call.typeArgument, null, sourceText);
+    const variants = generateMockVariants(call.typeArgument, null, sourceText, call.fileName);
     const route: MockRoute = {
       id: `route_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       method: call.method,
@@ -127,7 +128,52 @@ export function activate(context: vscode.ExtensionContext): void {
     for (const call of calls) {
       await autoMockCall(call);
     }
-    vscode.window.showInformationMessage(`⚡ MockScope: Auto-generated realistic mocks for all ${calls.length} endpoints!`);
+    vscode.window.showInformationMessage(`MockScope: Auto-generated realistic mocks for all ${calls.length} endpoints.`);
+  };
+
+  const openEndpointInBrowser = async (urlPattern: string) => {
+    try {
+      if (!runtimeProxy || !runtimeProxy.isRunning) {
+        if (!runtimeProxy) {
+          runtimeProxy = new RuntimeProxy(DEFAULT_PROXY_PORT);
+        }
+        await runtimeProxy.start();
+        updateStatusBar();
+      }
+
+      const port = runtimeProxy.port || DEFAULT_PROXY_PORT;
+
+      let resolved = urlPattern.trim();
+      if (!resolved.startsWith('/') && !resolved.startsWith('http://') && !resolved.startsWith('https://')) {
+        resolved = '/' + resolved;
+      }
+      if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+        try {
+          const parsed = new URL(resolved);
+          resolved = parsed.pathname + (parsed.search || '');
+        } catch {
+          resolved = '/' + resolved.replace(/^https?:\/\/[^/]+/, '');
+        }
+      }
+
+      resolved = resolved.replace(/:([a-zA-Z0-9_]+)/g, (_match, paramName) => {
+        const lower = paramName.toLowerCase();
+        if (lower.includes('id')) return '1';
+        if (lower.includes('type')) return 'all';
+        if (lower.includes('slug')) return 'sample-slug';
+        return 'sample';
+      });
+
+      resolved = resolved.replace(/\*/g, 'sample');
+
+      const finalUrl = `http://127.0.0.1:${port}${resolved.startsWith('/') ? '' : '/'}${resolved}`;
+      assertLoopbackHost('127.0.0.1');
+
+      await vscode.env.openExternal(vscode.Uri.parse(finalUrl));
+      vscode.window.showInformationMessage(`MockScope: Opened mock endpoint in browser: ${finalUrl}`);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to open endpoint in browser: ${err.message}`);
+    }
   };
 
   const openWorkbench = () => {
@@ -190,8 +236,9 @@ export function activate(context: vscode.ExtensionContext): void {
         },
         onCopyText: async (text: string, label: string) => {
           await vscode.env.clipboard.writeText(text);
-          vscode.window.showInformationMessage(`📋 Copied ${label} to clipboard!`);
+          vscode.window.showInformationMessage(`MockScope: Copied ${label} to clipboard.`);
         },
+        onOpenEndpointInBrowser: openEndpointInBrowser,
         onScanWorkspace: scanWorkspaceApiCalls,
         onMockDetectedCall: autoMockCall,
         onMockAllCalls: autoMockAllCalls,
@@ -233,7 +280,8 @@ export function activate(context: vscode.ExtensionContext): void {
         await vscode.commands.executeCommand('mockscope.attachCdp');
       }
     },
-    openWorkbench
+    openWorkbench,
+    openEndpointInBrowser
   );
 
   context.subscriptions.push(
@@ -359,14 +407,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       'mockscope.mockCall',
       async (call: DetectedApiCall, sourceText?: string) => {
-        const variants = generateMockVariants(call.typeArgument, null, sourceText);
+        const variants = generateMockVariants(call.typeArgument, null, sourceText, call.fileName);
 
         const selection = await vscode.window.showQuickPick(
           [
-            { label: '⚡ 200 OK', description: 'Synthesized payload matching return type', variant: variants.ok200 },
-            { label: '⚠️ 400 Bad Request', description: 'Simulate client validation error', variant: variants.bad400 },
-            { label: '🔥 500 Server Error', description: 'Simulate upstream server failure', variant: variants.server500 },
-            { label: '⚪ 204 No Content', description: 'Empty response body', variant: variants.empty204 },
+            { label: '$(check) 200 OK', description: 'Synthesized payload matching return type', variant: variants.ok200 },
+            { label: '$(warning) 400 Bad Request', description: 'Simulate client validation error', variant: variants.bad400 },
+            { label: '$(error) 500 Server Error', description: 'Simulate upstream server failure', variant: variants.server500 },
+            { label: '$(circle-slash) 204 No Content', description: 'Empty response body', variant: variants.empty204 },
           ],
           { placeHolder: `Select mock response for ${call.method} ${call.url}` }
         );
@@ -404,10 +452,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       'mockscope.copyPlaywrightSpec',
       async (call: DetectedApiCall, sourceText?: string) => {
-        const variants = generateMockVariants(call.typeArgument, null, sourceText);
+        const variants = generateMockVariants(call.typeArgument, null, sourceText, call.fileName);
         const spec = generatePlaywrightSpec(call, variants.ok200);
         await vscode.env.clipboard.writeText(spec);
-        vscode.window.showInformationMessage('📋 MockScope: Playwright route spec copied to clipboard!');
+        vscode.window.showInformationMessage('MockScope: Playwright route spec copied to clipboard.');
       }
     )
   );
@@ -416,10 +464,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       'mockscope.copyMswHandler',
       async (call: DetectedApiCall, sourceText?: string) => {
-        const variants = generateMockVariants(call.typeArgument, null, sourceText);
+        const variants = generateMockVariants(call.typeArgument, null, sourceText, call.fileName);
         const handler = generateMswHandler(call, variants.ok200);
         await vscode.env.clipboard.writeText(handler);
-        vscode.window.showInformationMessage('📋 MockScope: MSW v2 handler copied to clipboard!');
+        vscode.window.showInformationMessage('MockScope: MSW v2 handler copied to clipboard.');
       }
     )
   );
@@ -430,6 +478,30 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('mockscope.openDashboard', openWorkbench)
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mockscope.openInBrowser', async (routeOrUrl?: MockRoute | string) => {
+      let targetUrl = typeof routeOrUrl === 'string' ? routeOrUrl : routeOrUrl?.urlPattern;
+      if (!targetUrl) {
+        const routes = getRoutes();
+        if (routes.length === 0) {
+          vscode.window.showInformationMessage('MockScope: No mock routes configured yet. Create or discover routes first.');
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          routes.map((r) => ({
+            label: `${r.method} ${r.urlPattern}`,
+            description: `Status: ${r.statusCode} | Delay: ${r.delayMs || 0}ms`,
+            route: r,
+          })),
+          { placeHolder: 'Select a mock endpoint to test live in your browser' }
+        );
+        if (!pick) return;
+        targetUrl = pick.route.urlPattern;
+      }
+      await openEndpointInBrowser(targetUrl);
+    })
   );
 
   updateStatusBar();

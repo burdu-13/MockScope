@@ -74,6 +74,11 @@
         "command": "mockscope.openDashboard",
         "title": "MockScope: Open Traffic & Route Dashboard",
         "category": "MockScope"
+      },
+      {
+        "command": "mockscope.openInBrowser",
+        "title": "MockScope: Preview Mock Endpoint in Browser",
+        "category": "MockScope"
       }
     ],
     "viewsContainers": {
