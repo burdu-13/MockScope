@@ -16,7 +16,8 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     private readonly onToggleProxy: () => void,
     private readonly onToggleCdp: () => void,
     private readonly onOpenWorkbench: () => void,
-    private readonly onOpenEndpointInBrowser?: (url: string) => void
+    private readonly onOpenEndpointInBrowser?: (url: string) => void,
+    private readonly getProjectStack?: () => any
   ) {}
 
   public resolveWebviewView(
@@ -71,6 +72,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       cdp: this.getCdpState(),
       routes: this.getRoutes(),
       traffic: this.getTraffic(),
+      projectStack: this.getProjectStack?.(),
     });
   }
 
@@ -91,64 +93,89 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     connect-src ws://127.0.0.1:* http://127.0.0.1:*;
   ">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MockScope Dashboard</title>
+  <title>MockScope</title>
   <style>
     :root {
-      --bg: var(--vscode-editor-background);
-      --fg: var(--vscode-foreground);
-      --card-bg: var(--vscode-editorWidget-background, #252526);
-      --border: var(--vscode-widget-border, #3c3c3c);
-      --btn-bg: var(--vscode-button-background);
-      --btn-fg: var(--vscode-button-foreground);
-      --btn-hover: var(--vscode-button-hoverBackground);
-      --btn-sec-bg: var(--vscode-button-secondaryBackground, #3a3d41);
-      --btn-sec-fg: var(--vscode-button-secondaryForeground, #ffffff);
-      --btn-sec-hover: var(--vscode-button-secondaryHoverBackground, #45494e);
-      --accent: #007acc;
-      --success: #3fb950;
-      --muted: var(--vscode-descriptionForeground, #8c8c8c);
+      --bg: var(--vscode-sideBar-background, #141417);
+      --fg: var(--vscode-foreground, #e4e4e7);
+      --muted: var(--vscode-descriptionForeground, #8b8b93);
+      --border: var(--vscode-panel-border, #27272a);
+      --hover-bg: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+      --btn-bg: var(--vscode-button-background, #2563eb);
+      --btn-fg: var(--vscode-button-foreground, #ffffff);
+      --btn-hover: var(--vscode-button-hoverBackground, #1d4ed8);
+      --ui-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+      --code-font: var(--vscode-editor-font-family, Consolas, monospace);
+      --success: #22c55e;
     }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-family: var(--ui-font);
       padding: 12px;
       color: var(--fg);
       background-color: var(--bg);
       font-size: 12px;
       margin: 0;
+      line-height: 1.4;
     }
     .header-panel {
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      margin-bottom: 16px;
+      gap: 8px;
+      margin-bottom: 12px;
       padding-bottom: 12px;
-      border-bottom: 1px solid var(--vscode-panel-border, #333);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .brand-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--fg);
+      letter-spacing: -0.01em;
+    }
+    .brand-title svg {
+      color: var(--fg);
+      flex-shrink: 0;
+    }
+    .stack-meta {
+      font-family: var(--code-font);
+      font-size: 11px;
+      color: var(--muted);
     }
     .status-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
       font-size: 11px;
+      color: var(--muted);
+    }
+    .status-row strong {
+      color: var(--fg);
+      font-weight: 500;
     }
     .status-indicator {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      font-weight: 500;
+      font-family: var(--code-font);
+      font-size: 11px;
+      color: var(--fg);
     }
     .status-dot {
-      width: 8px;
-      height: 8px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       display: inline-block;
     }
-    .status-dot.online {
-      background-color: var(--success);
-      box-shadow: 0 0 6px rgba(63, 185, 80, 0.6);
-    }
-    .status-dot.offline {
-      background-color: #6e7681;
-    }
+    .status-dot.online { background-color: var(--success); }
+    .status-dot.offline { background-color: #52525b; }
     .button-group {
       display: flex;
       gap: 6px;
@@ -156,10 +183,11 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       margin-top: 4px;
     }
     button {
-      background: var(--btn-sec-bg);
-      color: var(--btn-sec-fg);
-      border: 1px solid transparent;
-      padding: 5px 10px;
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      height: 24px;
       border-radius: 3px;
       cursor: pointer;
       font-size: 11px;
@@ -167,25 +195,24 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      transition: background 0.15s ease;
+      transition: background 0.1s ease, border-color 0.1s ease;
     }
     button:hover {
-      background: var(--btn-sec-hover);
+      background: var(--hover-bg);
+      border-color: var(--muted);
     }
     button.primary {
       background: var(--btn-bg);
       color: var(--btn-fg);
-      font-weight: 600;
+      border-color: transparent;
     }
     button.primary:hover {
       background: var(--btn-hover);
     }
     .section-title {
-      font-weight: 600;
-      text-transform: uppercase;
+      font-weight: 500;
       font-size: 11px;
-      letter-spacing: 0.5px;
-      margin: 14px 0 6px 0;
+      margin: 12px 0 4px 0;
       color: var(--muted);
       display: flex;
       justify-content: space-between;
@@ -194,113 +221,120 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     .item-list {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      max-height: 250px;
+      max-height: 240px;
       overflow-y: auto;
+      border-top: 1px solid var(--border);
     }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      transition: border-color 0.15s ease;
-    }
-    .card:hover {
-      border-color: #666;
-    }
-    .card-row {
+    .row-item {
+      border-bottom: 1px solid var(--border);
+      padding: 6px 4px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 6px;
+    }
+    .row-item:hover {
+      background: var(--hover-bg);
     }
     .method-badge {
-      font-weight: 700;
-      font-size: 10px;
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-family: monospace;
-    }
-    .method-get { background: #007acc; color: #fff; }
-    .method-post { background: #238636; color: #fff; }
-    .method-put { background: #b08800; color: #fff; }
-    .method-delete { background: #da3633; color: #fff; }
-    .method-other { background: #6e7681; color: #fff; }
-    .url-text {
-      font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 11px;
-      word-break: break-all;
-    }
-    .badge-mock {
-      background: rgba(63, 185, 80, 0.2);
-      color: var(--success);
-      border: 1px solid var(--success);
-      font-size: 9px;
-      padding: 1px 4px;
-      border-radius: 2px;
       font-weight: 600;
-      text-transform: uppercase;
+      font-size: 11px;
+      width: 38px;
+      font-family: var(--code-font);
+      flex-shrink: 0;
     }
-    .badge-pass {
-      background: rgba(110, 118, 129, 0.2);
-      color: #8b949e;
-      border: 1px solid #484f58;
-      font-size: 9px;
-      padding: 1px 4px;
-      border-radius: 2px;
-      font-weight: 500;
-      text-transform: uppercase;
+    .method-get { color: #60a5fa; }
+    .method-post { color: #4ade80; }
+    .method-put { color: #facc15; }
+    .method-delete { color: #f87171; }
+    .method-other { color: var(--muted); }
+    .url-text {
+      font-family: var(--code-font);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+      color: var(--fg);
+    }
+    .meta-code {
+      font-family: var(--code-font);
+      font-size: 11px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
     }
     .empty-state {
       color: var(--muted);
-      padding: 10px 0;
+      padding: 8px 0;
       font-size: 11px;
-      line-height: 1.4;
     }
   </style>
 </head>
 <body>
-  <div class="header-panel">
-    <div class="status-row">
-      <span><strong>Proxy (127.0.0.1)</strong>: <span id="proxyPortText">45990</span></span>
-      <span class="status-indicator">
-        <span id="proxyDot" class="status-dot offline"></span>
-        <span id="proxyText">OFF</span>
+  <header class="header-panel" role="banner">
+    <div class="brand-row">
+      <span class="brand-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9.25" stroke="#3B82F6" stroke-width="1.85"/>
+          <line x1="12" y1="1.25" x2="12" y2="3.75" stroke="#3B82F6" stroke-width="1.85"/>
+          <line x1="12" y1="20.25" x2="12" y2="22.75" stroke="#3B82F6" stroke-width="1.85"/>
+          <line x1="1.25" y1="12" x2="3.75" y2="12" stroke="#3B82F6" stroke-width="1.85"/>
+          <line x1="20.25" y1="12" x2="22.75" y2="12" stroke="#3B82F6" stroke-width="1.85"/>
+          <path d="M9.75 8.5C8.5 8.5 8.25 9.25 8.25 10.25V11C8.25 11.55 7.65 12 7 12C7.65 12 8.25 12.45 8.25 13V13.75C8.25 14.75 8.5 15.5 9.75 15.5" stroke="#F4F4F5" stroke-width="1.85"/>
+          <path d="M14.25 8.5C15.5 8.5 15.75 9.25 15.75 10.25V11C15.75 11.55 16.35 12 17 12C16.35 12 15.75 12.45 15.75 13V13.75C15.75 14.75 15.5 15.5 14.25 15.5" stroke="#F4F4F5" stroke-width="1.85"/>
+          <circle cx="12" cy="12" r="1.5" fill="#38BDF8" stroke="none"/>
+        </svg>
+        <span>MockScope</span>
       </span>
+      <span id="sidebarStackBadge" class="stack-meta">Detecting...</span>
     </div>
     <div class="status-row">
-      <span><strong>Browser CDP</strong>: <span id="cdpPortText">9222</span></span>
-      <span class="status-indicator">
-        <span id="cdpDot" class="status-dot offline"></span>
-        <span id="cdpText">DETACHED</span>
-      </span>
+      <span><strong>Proxy</strong> 127.0.0.1:<span id="proxyPortText">45990</span></span>
+      <output class="status-indicator" aria-live="polite">
+        <span id="proxyDot" class="status-dot offline" aria-hidden="true"></span>
+        <span id="proxyText">Off</span>
+      </output>
     </div>
-    <div class="button-group">
-      <button id="openWorkbenchBtn" class="primary" nonce="${nonce}" title="Open MockScope Workbench visual workbench">
-        <span>Open Workbench</span>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    <div class="status-row">
+      <span><strong>CDP</strong> 127.0.0.1:<span id="cdpPortText">9222</span></span>
+      <output class="status-indicator" aria-live="polite">
+        <span id="cdpDot" class="status-dot offline" aria-hidden="true"></span>
+        <span id="cdpText">Off</span>
+      </output>
+    </div>
+    <nav class="button-group" aria-label="Runtime Controls">
+      <button type="button" id="openWorkbenchBtn" class="primary" nonce="${nonce}" title="Open MockScope">
+        <span>Open</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
       </button>
-      <button id="toggleProxyBtn" nonce="${nonce}">Toggle Proxy</button>
-      <button id="toggleCdpBtn" nonce="${nonce}">Toggle CDP</button>
-      <button id="clearTrafficBtn" nonce="${nonce}">Clear</button>
-    </div>
-  </div>
+      <button type="button" id="toggleProxyBtn" nonce="${nonce}">Proxy</button>
+      <button type="button" id="toggleCdpBtn" nonce="${nonce}">CDP</button>
+      <button type="button" id="clearTrafficBtn" nonce="${nonce}">Clear</button>
+    </nav>
+  </header>
 
-  <div class="section-title">
-    <span>Mock Routes (<span id="routeCount">0</span>)</span>
-  </div>
-  <div id="routeList" class="item-list">
-    <div class="empty-state">No mock routes configured. Use CodeLens or Open Workbench to configure routes.</div>
-  </div>
+  <main>
+    <section aria-labelledby="routesHeading">
+      <h2 id="routesHeading" class="section-title">
+        <span>Routes</span>
+        <span id="routeCount" class="meta-code">0</span>
+      </h2>
+      <div id="routeList" class="item-list" role="list">
+        <div class="empty-state">No mock routes configured.</div>
+      </div>
+    </section>
 
-  <div class="section-title">
-    <span>Live Traffic (<span id="trafficCount">0</span>/100)</span>
-  </div>
-  <div id="trafficList" class="item-list">
-    <div class="empty-state">No intercepted requests yet.</div>
-  </div>
+    <section aria-labelledby="trafficHeading">
+      <h2 id="trafficHeading" class="section-title">
+        <span>Traffic</span>
+        <span class="meta-code"><span id="trafficCount">0</span>/100</span>
+      </h2>
+      <div id="trafficList" class="item-list" role="log" aria-live="polite">
+        <div class="empty-state">No intercepted requests.</div>
+      </div>
+    </section>
+  </main>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -339,11 +373,11 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       const proxyText = document.getElementById('proxyText');
       const proxyPortText = document.getElementById('proxyPortText');
       if (data.proxy && data.proxy.running) {
-        proxyText.textContent = 'RUNNING';
+        proxyText.textContent = 'Running';
         proxyDot.className = 'status-dot online';
         proxyPortText.textContent = data.proxy.port;
       } else {
-        proxyText.textContent = 'OFF';
+        proxyText.textContent = 'Off';
         proxyDot.className = 'status-dot offline';
       }
 
@@ -351,12 +385,24 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       const cdpText = document.getElementById('cdpText');
       const cdpPortText = document.getElementById('cdpPortText');
       if (data.cdp && data.cdp.attached) {
-        cdpText.textContent = 'ATTACHED';
+        cdpText.textContent = 'Attached';
         cdpDot.className = 'status-dot online';
         cdpPortText.textContent = data.cdp.port;
       } else {
-        cdpText.textContent = 'DETACHED';
+        cdpText.textContent = 'Off';
         cdpDot.className = 'status-dot offline';
+      }
+
+      const stackBadge = document.getElementById('sidebarStackBadge');
+      if (stackBadge) {
+        if (data.projectStack && data.projectStack.frameworkDisplayName) {
+          const p = data.projectStack;
+          const ver = p.frameworkVersion ? ' v' + p.frameworkVersion : '';
+          stackBadge.textContent = p.frameworkDisplayName + ver + ' · ' + p.primaryClient;
+          stackBadge.title = p.conventions ? p.conventions.description : '';
+        } else {
+          stackBadge.textContent = 'TypeScript / JS';
+        }
       }
 
       const routeList = document.getElementById('routeList');
@@ -365,22 +411,16 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       routeCount.textContent = routes.length;
 
       if (routes.length === 0) {
-        routeList.innerHTML = '<div class="empty-state">No mock routes configured. Use CodeLens or Open Workbench to configure routes.</div>';
+        routeList.innerHTML = '<div class="empty-state">No mock routes configured.</div>';
       } else {
         routeList.innerHTML = routes.map(r => \`
-          <div class="card">
-            <div class="card-row">
-              <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;">
-                <span class="method-badge \${getMethodClass(r.method)}">\${r.method}</span>
-                <span class="url-text" title="\${r.urlPattern}">\${r.urlPattern}</span>
-              </div>
-              <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                <span>\${r.statusCode}</span>
-                <button class="open-browser-btn" data-url="\${r.urlPattern}" title="Preview mock endpoint in browser" style="padding: 2px 5px; font-size: 10px; background: transparent; border: 1px solid var(--border); border-radius: 3px;">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                </button>
-              </div>
-            </div>
+          <div class="row-item">
+            <span class="method-badge \${getMethodClass(r.method)}">\${r.method}</span>
+            <span class="url-text" title="\${r.urlPattern}">\${r.urlPattern}</span>
+            <span class="meta-code">\${r.statusCode}</span>
+            <button class="open-browser-btn" data-url="\${r.urlPattern}" title="Open in browser" style="padding: 2px 4px; height: 18px;">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
           </div>
         \`).join('');
 
@@ -398,18 +438,13 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       trafficCount.textContent = traffic.length;
 
       if (traffic.length === 0) {
-        trafficList.innerHTML = '<div class="empty-state">No intercepted requests yet.</div>';
+        trafficList.innerHTML = '<div class="empty-state">No intercepted requests.</div>';
       } else {
         trafficList.innerHTML = [...traffic].reverse().map(t => \`
-          <div class="card">
-            <div class="card-row">
-              <div style="display: flex; align-items: center; gap: 4px;">
-                <span class="method-badge \${getMethodClass(t.method)}">\${t.method}</span>
-                <span class="\${t.isMocked ? 'badge-mock' : 'badge-pass'}">\${t.isMocked ? 'MOCKED' : 'PASS'}</span>
-              </div>
-              <span class="url-text">\${t.url}</span>
-              <span>\${t.statusCode} (\${t.durationMs}ms)</span>
-            </div>
+          <div class="row-item">
+            <span class="method-badge \${getMethodClass(t.method)}">\${t.method}</span>
+            <span class="url-text" title="\${t.url}">\${t.url}</span>
+            <span class="meta-code">\${t.statusCode} · \${t.durationMs}ms</span>
           </div>
         \`).join('');
       }

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
+  <!-- Minimalist Utilitarian Matte Badge -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#09090B" stroke="#27272A" stroke-width="6" />
+  <!-- Subtle Inner Reticle Guide -->
+  <circle cx="128" cy="128" r="82" stroke="#27272A" stroke-width="3" stroke-dasharray="6 8" />
+  <!-- Precision Scope Outer Ring -->
+  <circle cx="128" cy="128" r="68" stroke="#E4E4E7" stroke-width="10" />
+  <!-- Cardinal Scope Reticle Ticks -->
+  <line x1="128" y1="42" x2="128" y2="66" stroke="#E4E4E7" stroke-width="10" stroke-linecap="round" />
+  <line x1="128" y1="190" x2="128" y2="214" stroke="#E4E4E7" stroke-width="10" stroke-linecap="round" />
+  <line x1="42" y1="128" x2="66" y2="128" stroke="#E4E4E7" stroke-width="10" stroke-linecap="round" />
+  <line x1="190" y1="128" x2="214" y2="128" stroke="#E4E4E7" stroke-width="10" stroke-linecap="round" />
+  <!-- Inner API Contract Braces { } -->
+  <path d="M106 94C96 94 92 99 92 107V118C92 124 87 128 81 128C87 128 92 132 92 138V149C92 157 96 162 106 162" stroke="#FAFAFA" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M150 94C160 94 164 99 164 107V118C164 124 169 128 175 128C169 128 164 132 164 138V149C164 157 160 162 150 162" stroke="#FAFAFA" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Central Intercepted API Node -->
+  <circle cx="128" cy="128" r="13" fill="#3B82F6" />
+</svg>

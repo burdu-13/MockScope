@@ -1,2 +1,2 @@
 export * from './dashboard-view-provider';
-export * from './workbench-panel';
+export * from './workbench/index';
