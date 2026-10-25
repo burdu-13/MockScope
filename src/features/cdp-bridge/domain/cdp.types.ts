@@ -1,8 +1,36 @@
 import type { MockRoute, TrafficEntry } from '../../../shared/kernel/index';
 
+export interface InstalledBrowserInfo {
+  name: string;
+  path: string;
+}
+
+export interface BrowserLaunchOptions {
+  port?: number | undefined;
+  url?: string | undefined;
+  userDataDir?: string | undefined;
+  customBrowserPath?: string | undefined;
+  timeoutMs?: number | undefined;
+}
+
+export interface BrowserLaunchResult {
+  browserName: string;
+  executablePath: string;
+  port: number;
+  userDataDir: string;
+}
+
+export interface CdpAttachOptions {
+  autoLaunch?: boolean | undefined;
+  targetUrl?: string | undefined;
+  customBrowserPath?: string | undefined;
+  timeoutMs?: number | undefined;
+}
+
 export interface CdpController {
   readonly debugPort: number;
   readonly isAttached: boolean;
+  attach(options?: CdpAttachOptions): Promise<void>;
   addRoute(route: MockRoute): void;
   removeRoute(routeId: string): void;
   getRoutes(): MockRoute[];

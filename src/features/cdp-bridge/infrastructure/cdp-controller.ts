@@ -7,13 +7,17 @@ import {
   type MockRoute,
   type TrafficEntry,
   globalEventBus,
+  generateCompanionAuthResponse,
+  generateMockJwt,
 } from '../../../shared/kernel/index';
 import { RouteTable } from '../../runtime-proxy/index';
 import type {
   CdpController,
+  CdpAttachOptions,
   ChromeVersionInfo,
   FetchRequestPausedParams,
 } from '../domain/cdp.types';
+import { launchBrowserWithDebugging } from './browser-launcher';
 
 export class CdpBridgeController implements CdpController {
   private client: CdpClient | null = null;
@@ -57,11 +61,27 @@ export class CdpBridgeController implements CdpController {
     this.trafficLedger.clear();
   }
 
-  public async attach(): Promise<void> {
+  public async attach(options?: CdpAttachOptions): Promise<void> {
     if (this._isAttached) return;
 
     if (!this.client) {
-      const wsUrl = await this.discoverWebSocketDebuggerUrl(this.debugPort);
+      let wsUrl: string;
+      try {
+        wsUrl = await this.discoverWebSocketDebuggerUrl(this.debugPort);
+      } catch (err: unknown) {
+        if (options?.autoLaunch === true) {
+          await launchBrowserWithDebugging({
+            port: this.debugPort,
+            url: options?.targetUrl,
+            customBrowserPath: options?.customBrowserPath,
+            timeoutMs: options?.timeoutMs,
+          });
+          wsUrl = await this.discoverWebSocketDebuggerUrl(this.debugPort);
+        } else {
+          throw err;
+        }
+      }
+
       this.client = new CdpClient(wsUrl);
       await this.client.connect();
     } else if (!this.client.isConnected) {
@@ -89,28 +109,152 @@ export class CdpBridgeController implements CdpController {
 
     const startTime = Date.now();
     const matchedRoute = this.routeTable.match(method, url);
+    const lowerUrl = url.toLowerCase();
+
+    const isImageRequest =
+      lowerUrl.endsWith('.jpg') ||
+      lowerUrl.endsWith('.jpeg') ||
+      lowerUrl.endsWith('.png') ||
+      lowerUrl.endsWith('.svg') ||
+      lowerUrl.endsWith('.webp') ||
+      lowerUrl.includes('poster') ||
+      lowerUrl.includes('avatar') ||
+      lowerUrl.includes('backdrop') ||
+      lowerUrl.includes('placeholder');
+
+    const is2faEndpoint =
+      method === 'POST' &&
+      (lowerUrl.includes('/2fa') ||
+        lowerUrl.includes('/mfa') ||
+        lowerUrl.includes('/otp') ||
+        lowerUrl.includes('/verify') ||
+        lowerUrl.includes('/totp'));
+
+    const isAuthProfileEndpoint =
+      !isImageRequest &&
+      (lowerUrl.includes('/me') ||
+        lowerUrl.includes('/profile') ||
+        lowerUrl.includes('/current-user') ||
+        lowerUrl.includes('/currentuser') ||
+        lowerUrl.includes('/account') ||
+        lowerUrl.includes('/session') ||
+        lowerUrl.includes('/permissions') ||
+        lowerUrl.includes('/roles') ||
+        lowerUrl.endsWith('/user') ||
+        lowerUrl.includes('/user/') ||
+        lowerUrl.includes('/users/'));
+
+    const isTokenRefreshEndpoint =
+      method === 'POST' &&
+      (lowerUrl.includes('/refresh') ||
+        (lowerUrl.includes('/token') && !lowerUrl.includes('/login')));
+
+    let fulfillBody: string | null = null;
+    let fulfillStatusCode = 200;
+    let customHeaders: Record<string, string> = {};
 
     if (matchedRoute) {
       if (matchedRoute.delayMs && matchedRoute.delayMs > 0) {
         await new Promise((r) => setTimeout(r, matchedRoute.delayMs));
       }
-
-      const bodyContent =
+      fulfillStatusCode = matchedRoute.statusCode;
+      customHeaders = matchedRoute.headers || {};
+      fulfillBody =
         typeof matchedRoute.body === 'string'
           ? matchedRoute.body
-          : JSON.stringify(matchedRoute.body);
+          : JSON.stringify(matchedRoute.body, null, 2);
+    } else if (is2faEndpoint) {
+      let code = '';
+      let parsed: Record<string, unknown> = {};
+      try {
+        if (postData) {
+          parsed = JSON.parse(postData);
+          code = String(parsed.code || parsed.otp || parsed.totp || parsed.token || '').trim();
+        }
+      } catch {}
 
-      const base64Body = Buffer.from(bodyContent, 'utf-8').toString('base64');
+      if (code === '000000') {
+        fulfillStatusCode = 401;
+        fulfillBody = JSON.stringify(
+          {
+            error: 'InvalidVerificationCode',
+            message: 'The verification code provided is incorrect or has expired.',
+            code: 'MFA_CODE_INVALID',
+          },
+          null,
+          2
+        );
+      } else {
+        const userName = String(parsed['name'] || parsed['username'] || 'Dev User');
+        const userEmail = String(parsed['email'] || 'dev@example.com');
+        const userId = String(parsed['id'] || parsed['userId'] || 'usr_dev_1');
 
+        const jwt = generateMockJwt({
+          mfa_verified: true,
+          twoFactorVerified: true,
+          sub: userId,
+          id: userId,
+          userId,
+          name: userName,
+          email: userEmail,
+          username: String(parsed['username'] || 'devuser'),
+        });
+        const base = {
+          authenticated: true,
+          success: true,
+          status: 'success',
+          accessToken: jwt,
+          token: jwt,
+          jwt,
+          access_token: jwt,
+          refreshToken: 'rt_refresh_token_dev_1',
+          tokenType: 'Bearer',
+          token_type: 'Bearer',
+          expiresIn: 86400,
+          user: {
+            id: userId,
+            userId,
+            email: userEmail,
+            name: userName,
+            role: 'admin',
+            roles: ['user', 'developer', 'admin'],
+            twoFactorVerified: true,
+          },
+        };
+        fulfillStatusCode = 200;
+        customHeaders = { 'Set-Cookie': 'mockscope_auth=authenticated; Path=/; SameSite=Lax' };
+        fulfillBody = JSON.stringify(
+          {
+            data: base,
+            result: base,
+            payload: base,
+            ...base,
+          },
+          null,
+          2
+        );
+      }
+    } else if (isAuthProfileEndpoint) {
+      fulfillStatusCode = 200;
+      customHeaders = { 'Set-Cookie': 'mockscope_session=active; Path=/; SameSite=Lax' };
+      fulfillBody = JSON.stringify(generateCompanionAuthResponse('profile'), null, 2);
+    } else if (isTokenRefreshEndpoint) {
+      fulfillStatusCode = 200;
+      customHeaders = { 'Set-Cookie': 'mockscope_session=active; Path=/; SameSite=Lax' };
+      fulfillBody = JSON.stringify(generateCompanionAuthResponse('refresh'), null, 2);
+    }
+
+    if (fulfillBody !== null) {
+      const base64Body = Buffer.from(fulfillBody, 'utf-8').toString('base64');
       const responseHeaders = [
         { name: 'Content-Type', value: 'application/json' },
-        ...Object.entries(matchedRoute.headers || {}).map(([name, value]) => ({ name, value })),
+        ...Object.entries(customHeaders).map(([name, value]) => ({ name, value })),
       ];
 
       try {
         await this.client?.send('Fetch.fulfillRequest', {
           requestId,
-          responseCode: matchedRoute.statusCode,
+          responseCode: fulfillStatusCode,
           responseHeaders,
           body: base64Body,
         });
@@ -127,12 +271,12 @@ export class CdpBridgeController implements CdpController {
           url,
           requestHeaders: sanitizeHeaders(headers),
           requestBody: postData,
-          statusCode: matchedRoute.statusCode,
+          statusCode: fulfillStatusCode,
           responseHeaders: sanitizeHeaders(resHeaderMap),
-          responseBody: bodyContent,
+          responseBody: fulfillBody,
           durationMs: Date.now() - startTime,
           isMocked: true,
-          matchedRouteId: matchedRoute.id,
+          matchedRouteId: matchedRoute?.id,
         };
 
         this.trafficLedger.push(entry);
@@ -216,9 +360,10 @@ export class CdpBridgeController implements CdpController {
 
 export async function attachBrowser(
   debugPort: number = 9222,
-  routeTable?: RouteTable
+  routeTable?: RouteTable,
+  options?: CdpAttachOptions
 ): Promise<CdpController> {
   const controller = new CdpBridgeController(debugPort, routeTable);
-  await controller.attach();
+  await controller.attach(options);
   return controller;
 }

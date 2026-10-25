@@ -26,7 +26,7 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
 
       lenses.push(
         new vscode.CodeLens(range, {
-          title: `Mock API (${call.method} ${call.url})`,
+          title: `$(radio-tower) Mock API (${call.method} ${call.url})`,
           command: 'mockscope.mockCall',
           arguments: [call, document.getText()],
         })
@@ -34,7 +34,22 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
 
       lenses.push(
         new vscode.CodeLens(range, {
-          title: 'Playwright Spec',
+          title: '$(window) Workbench',
+          command: 'mockscope.openWorkbench',
+        })
+      );
+
+      lenses.push(
+        new vscode.CodeLens(range, {
+          title: '$(globe) Preview',
+          command: 'mockscope.openInBrowser',
+          arguments: [call.url],
+        })
+      );
+
+      lenses.push(
+        new vscode.CodeLens(range, {
+          title: '$(copy) Playwright',
           command: 'mockscope.copyPlaywrightSpec',
           arguments: [call, document.getText()],
         })
@@ -42,7 +57,7 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
 
       lenses.push(
         new vscode.CodeLens(range, {
-          title: 'MSW v2 Handler',
+          title: '$(copy) MSW',
           command: 'mockscope.copyMswHandler',
           arguments: [call, document.getText()],
         })
