@@ -29,13 +29,7 @@ export function getWorkbenchHtml(
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="
-    default-src 'none';
-    style-src ${cspSource} 'unsafe-inline';
-    script-src 'nonce-${nonce}';
-    img-src ${cspSource} data:;
-    connect-src ws://127.0.0.1:* http://127.0.0.1:*;
-  ">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${cspSource} data:; connect-src ws://127.0.0.1:* http://127.0.0.1:*;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MockScope</title>
   <style>

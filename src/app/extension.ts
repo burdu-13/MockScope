@@ -44,10 +44,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider(
       [
-        { language: 'typescript' },
-        { language: 'typescriptreact' },
-        { language: 'javascript' },
-        { language: 'javascriptreact' },
+        { scheme: 'file', language: 'typescript' },
+        { scheme: 'file', language: 'typescriptreact' },
+        { scheme: 'file', language: 'javascript' },
+        { scheme: 'file', language: 'javascriptreact' },
       ],
       codeLensProvider
     )
