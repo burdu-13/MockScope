@@ -124,18 +124,18 @@ function extractUrlValue(
         result = resolvedBase.replace(/\/+$/, '') + (literal.startsWith('/') ? literal : '/' + literal);
       } else {
         const isBaseUrlVar =
-          firstExprText.includes('url') ||
-          firstExprText.includes('api') ||
-          firstExprText.includes('host') ||
-          firstExprText.includes('proxy') ||
-          firstExprText.includes('domain') ||
-          firstExprText.includes('endpoint') ||
-          firstExprText.includes('server') ||
-          firstExprText.includes('env') ||
-          firstExprText.includes('config') ||
-          literal.startsWith('/') ||
-          literal.startsWith('?path=') ||
-          literal.startsWith('?url=');
+          (firstExprText.includes('url') ||
+            firstExprText.includes('api') ||
+            firstExprText.includes('host') ||
+            firstExprText.includes('proxy') ||
+            firstExprText.includes('domain') ||
+            firstExprText.includes('server') ||
+            firstExprText.includes('env') ||
+            firstExprText.includes('config') ||
+            firstExprText.includes('base') ||
+            literal.startsWith('?path=') ||
+            literal.startsWith('?url=')) &&
+          !['type', 'category', 'item', 'entity', 'section', 'group', 'user'].includes(firstExprText);
 
         if (isBaseUrlVar) {
           startIndex = 1;
@@ -167,7 +167,30 @@ function extractUrlValue(
     if (localConstants && localConstants.has(text)) {
       return normalizeUrlPath(localConstants.get(text)!);
     }
-    return normalizeUrlPath(text);
+    const cleanProp = text.replace(/^this\./, '');
+    if (localConstants && localConstants.has(cleanProp)) {
+      return normalizeUrlPath(localConstants.get(cleanProp)!);
+    }
+    const lower = text.toLowerCase();
+    if (
+      lower === 'url' ||
+      lower === 'path' ||
+      lower === 'endpoint' ||
+      lower === 'uri' ||
+      lower === 'req' ||
+      lower === 'route' ||
+      lower === 'href' ||
+      lower === 'slug' ||
+      lower === 'id' ||
+      lower === 'query' ||
+      lower === 'params'
+    ) {
+      return undefined;
+    }
+    if (text.includes('/') || /^[A-Z0-9_]{3,}$/.test(text)) {
+      return normalizeUrlPath('/' + text.toLowerCase().replace(/_/g, '-'));
+    }
+    return undefined;
   }
   if (ts.isPropertyAccessExpression(node)) {
     const text = node.getText(sourceFile);
@@ -182,6 +205,40 @@ function extractUrlValue(
     if (propName.toLowerCase().includes('url') || propName.toLowerCase().includes('endpoint') || propName.toLowerCase().includes('api')) {
       return normalizeUrlPath('/' + propName.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''));
     }
+  }
+  return undefined;
+}
+
+
+function extractConfigObjectEndpoint(
+  node: ts.Node | undefined,
+  sourceFile: ts.SourceFile,
+  localConstants?: Map<string, string>
+): { url: string; method?: HttpMethod } | undefined {
+  if (!node || !ts.isObjectLiteralExpression(node)) return undefined;
+
+  let url: string | undefined;
+  let method: HttpMethod | undefined;
+
+  for (const prop of node.properties) {
+    if (ts.isPropertyAssignment(prop) && prop.name) {
+      const propName = prop.name.getText(sourceFile).replace(/['"]/g, '').toLowerCase();
+      if (propName === 'path' || propName === 'url' || propName === 'endpoint' || propName === 'uri') {
+        url = extractUrlValue(prop.initializer, sourceFile, localConstants);
+      } else if (propName === 'method') {
+        const val = extractStringValue(prop.initializer, sourceFile);
+        if (val) {
+          const upper = val.toUpperCase();
+          if (['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(upper)) {
+            method = upper as HttpMethod;
+          }
+        }
+      }
+    }
+  }
+
+  if (url) {
+    return { url, method: method || 'GET' };
   }
   return undefined;
 }
@@ -395,6 +452,65 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
 
   precollectConstants(sourceFile);
   precollectConstants(sourceFile);
+
+  const localHttpWrappers = new Set<string>();
+
+  function collectWrappers(n: ts.Node): void {
+    let fnName: string | undefined;
+    let body: ts.Node | undefined;
+
+    if (ts.isFunctionDeclaration(n) && n.name) {
+      fnName = n.name.text;
+      body = n.body;
+    } else if (ts.isMethodDeclaration(n) && ts.isIdentifier(n.name)) {
+      fnName = n.name.text;
+      body = n.body;
+    } else if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      fnName = n.name.text;
+      body = n.initializer.body;
+    }
+
+    if (fnName && body) {
+      let delegatesToHttp = false;
+      const checkBody = (child: ts.Node) => {
+        if (ts.isCallExpression(child)) {
+          const callText = child.expression.getText(sourceFile);
+          const lowerCall = callText.toLowerCase();
+          if (
+            callText === 'fetch' ||
+            callText === '$fetch' ||
+            callText === 'ofetch' ||
+            callText === 'ky' ||
+            callText === 'got' ||
+            lowerCall.endsWith('.get') ||
+            lowerCall.endsWith('.post') ||
+            lowerCall.endsWith('.put') ||
+            lowerCall.endsWith('.delete') ||
+            lowerCall.endsWith('.request') ||
+            localHttpWrappers.has(callText) ||
+            localHttpWrappers.has(callText.split('.').pop() || '')
+          ) {
+            delegatesToHttp = true;
+          }
+        }
+        ts.forEachChild(child, checkBody);
+      };
+      checkBody(body);
+      if (delegatesToHttp) {
+        localHttpWrappers.add(fnName);
+      }
+    }
+
+    ts.forEachChild(n, collectWrappers);
+  }
+
+  collectWrappers(sourceFile);
+  collectWrappers(sourceFile);
 
   const returnTypeStack: string[] = [];
   const enclosingScopeStack: ts.Node[] = [];
@@ -680,14 +796,64 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
       if (ts.isIdentifier(expr) && (expr.text === 'fetch' || expr.text === '$fetch' || expr.text === 'ofetch')) {
         const urlArg = node.arguments[0];
         const optionsArg = node.arguments[1];
-        const url = extractUrlValue(urlArg, sourceFile, localConstants);
+        let url = extractUrlValue(urlArg, sourceFile, localConstants);
+        let method = extractMethodFromOptions(optionsArg, sourceFile) || 'GET';
+
+        if (!url && urlArg && ts.isObjectLiteralExpression(urlArg)) {
+          const config = extractConfigObjectEndpoint(urlArg, sourceFile, localConstants);
+          if (config) {
+            url = config.url;
+            method = config.method || method;
+          }
+        }
+
         if (url) {
-          const method = extractMethodFromOptions(optionsArg, sourceFile) || 'GET';
           let typeArg: string | undefined;
           if (node.typeArguments && node.typeArguments.length > 0) {
             typeArg = node.typeArguments[0]!.getText(sourceFile);
           }
           recordCall(node, method, url, expr.text === 'fetch' ? 'fetch' : 'ofetch', typeArg);
+        }
+      }
+
+      else if (
+        (ts.isPropertyAccessExpression(expr) && expr.name.text.toLowerCase() === 'request') ||
+        (ts.isIdentifier(expr) && expr.text.toLowerCase() === 'request')
+      ) {
+        const objText = ts.isPropertyAccessExpression(expr) ? expr.expression.getText(sourceFile) : '';
+        const isAngular =
+          objText.startsWith('this._http') ||
+          objText.startsWith('this.http') ||
+          objText.startsWith('this.httpClient') ||
+          objText.startsWith('this._httpClient') ||
+          objText === '_http';
+        const clientType: ApiClientType = isAngular ? 'angular-http' : 'axios';
+
+        let url: string | undefined;
+        let method: HttpMethod = 'GET';
+
+        const firstArg = node.arguments[0];
+        if (firstArg && ts.isObjectLiteralExpression(firstArg)) {
+          const config = extractConfigObjectEndpoint(firstArg, sourceFile, localConstants);
+          if (config) {
+            url = config.url;
+            method = config.method || 'GET';
+          }
+        } else if (node.arguments.length >= 2) {
+          const methodVal = (extractStringValue(node.arguments[0], sourceFile)?.toUpperCase() || 'GET') as HttpMethod;
+          const urlVal = extractUrlValue(node.arguments[1], sourceFile, localConstants);
+          if (urlVal) {
+            url = urlVal;
+            method = methodVal;
+          }
+        }
+
+        if (url) {
+          let typeArg: string | undefined;
+          if (node.typeArguments && node.typeArguments.length > 0) {
+            typeArg = node.typeArguments[0]!.getText(sourceFile);
+          }
+          recordCall(node, method, url, clientType, typeArg);
         }
       }
 
@@ -708,25 +874,53 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
         const isHttpVerb = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'del'].includes(propName);
         const mappedVerb = (propName === 'del' ? 'DELETE' : propName.toUpperCase()) as HttpMethod;
 
-        const isAxios = objText === 'axios' || objText.endsWith('Axios') || objText.endsWith('Client') || objText === 'api' || objText === 'service' || objText === 'request';
+        const isAngularHttp =
+          objText.startsWith('this._http') ||
+          objText.startsWith('this.http') ||
+          objText.startsWith('this.httpClient') ||
+          objText.startsWith('this._httpClient') ||
+          objText === '_http' ||
+          lowerObj === 'nghttp';
+
         const isKy = objText === 'ky' || objText.endsWith('Ky');
         const isGot = objText === 'got';
         const isSuperagent = objText === 'superagent';
         const isWretch = objText.includes('wretch');
-        const isAngularHttp =
-          lowerObj.includes('http') ||
-          lowerObj.includes('api') ||
-          lowerObj.includes('service') ||
-          objText.startsWith('this._http') ||
-          objText.startsWith('this.http') ||
-          objText === '_http' ||
-          objText === 'http';
+        const isAxios =
+          !isAngularHttp &&
+          !isKy &&
+          !isGot &&
+          !isSuperagent &&
+          !isWretch &&
+          (objText === 'axios' ||
+            objText.endsWith('Axios') ||
+            objText.endsWith('Client') ||
+            objText.endsWith('Api') ||
+            objText === 'api' ||
+            objText === 'service' ||
+            objText === 'request' ||
+            objText === 'client' ||
+            objText.startsWith('this.api') ||
+            objText.startsWith('this.service') ||
+            objText.startsWith('this.client') ||
+            lowerObj.includes('api') ||
+            lowerObj.includes('service') ||
+            lowerObj.includes('http'));
         const isThreeLoader = (propName === 'load' && (lowerObj.includes('loader') || objText.includes('THREE')));
         const isXhrOpen = propName === 'open' && (lowerObj.includes('xhr') || objText.includes('request'));
 
         if ((isAxios || isKy || isGot || isSuperagent || isWretch || isAngularHttp) && isHttpVerb) {
+          if (node.arguments.some(arg => ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))) {
+            return;
+          }
           const urlArg = node.arguments[0];
-          const url = extractUrlValue(urlArg, sourceFile, localConstants);
+          let url = extractUrlValue(urlArg, sourceFile, localConstants);
+          if (!url && urlArg && ts.isObjectLiteralExpression(urlArg)) {
+            const config = extractConfigObjectEndpoint(urlArg, sourceFile, localConstants);
+            if (config) {
+              url = config.url;
+            }
+          }
           if (url) {
             let typeArg: string | undefined;
             if (node.typeArguments && node.typeArguments.length > 0) {
@@ -809,6 +1003,23 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
             typeArg = node.typeArguments[0]!.getText(sourceFile);
           }
           recordCall(node, 'GET', url, 'angular-http', typeArg);
+        }
+      }
+
+      else if (
+        (ts.isIdentifier(expr) && localHttpWrappers.has(expr.text)) ||
+        (ts.isPropertyAccessExpression(expr) && localHttpWrappers.has(expr.name.text))
+      ) {
+        const firstArg = node.arguments[0];
+        const url = extractUrlValue(firstArg, sourceFile, localConstants);
+        if (url && !url.includes(':url') && url !== '/url') {
+          let typeArg: string | undefined;
+          if (node.typeArguments && node.typeArguments.length > 0) {
+            typeArg = node.typeArguments[0]!.getText(sourceFile);
+          }
+          const optionsArg = node.arguments[1];
+          const method = extractMethodFromOptions(optionsArg, sourceFile) || 'GET';
+          recordCall(node, method, url, 'fetch', typeArg);
         }
       }
     }

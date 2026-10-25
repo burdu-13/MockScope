@@ -357,5 +357,96 @@ describe('ast-call-analyzer', () => {
     ]);
     expect(calls[0]!.responseConstraints!['reason']).toEqual(['phone_unverified']);
   });
-});
+  it('should detect OpenAPI and Swagger single-argument request configuration objects', () => {
+    const code = `
+      class ApiClient {
+        getArticles() {
+          return this.request<{ articles: any[] }>({
+            path: '/articles/feed',
+            method: 'GET',
+          });
+        }
 
+        followUser(username: string) {
+          return this.request<{ profile: any }>({
+            path: \`/profiles/\${username}/follow\`,
+            method: 'POST',
+          });
+        }
+      }
+    `;
+
+    const calls = detectApiCalls(code);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.url).toBe('/articles/feed');
+    expect(calls[0]!.method).toBe('GET');
+    expect(calls[1]!.url).toBe('/profiles/:username/follow');
+    expect(calls[1]!.method).toBe('POST');
+  });
+
+  it('should classify generic api client calls as axios rather than angular-http', () => {
+    const code = `
+      import { api } from '@/lib/api-client';
+
+      export const createComment = (data: any) => {
+        return api.post('/comments', data);
+      };
+    `;
+
+    const calls = detectApiCalls(code);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.clientType).toBe('axios');
+    expect(calls[0]!.url).toBe('/comments');
+    expect(calls[0]!.method).toBe('POST');
+  });
+
+  it('should detect transitive calls made through local HTTP wrapper functions', () => {
+    const code = `
+      async function _fetchTMDB(url: string, params: any) {
+        return await $fetch(url, { baseURL: '/tmdb', params });
+      }
+
+      export function fetchTMDB(url: string, params: any) {
+        return _fetchTMDB(url, params);
+      }
+
+      export async function getMedia(type: string, id: string) {
+        return fetchTMDB(\`\${type}/\${id}\`, { append_to_response: 'videos' });
+      }
+
+      export function getTrending(media: string) {
+        return fetchTMDB(\`trending/\${media}/week\`);
+      }
+    `;
+
+    const calls = detectApiCalls(code);
+    const urls = calls.map(c => c.url);
+    expect(urls).toContain('/:type/:id');
+    expect(urls).toContain('/trending/:media/week');
+  });
+
+  it('should distinguish client requests from mock and route handler callbacks', () => {
+    const code = `
+      import { http, HttpResponse } from 'msw';
+      import { httpClient } from './client';
+
+      export const handlers = [
+        http.get('/api/users', () => {
+          return HttpResponse.json({ ok: true });
+        }),
+        http.post('/ping', function() {
+          return HttpResponse.json({ pong: true });
+        }),
+      ];
+
+      export async function loadUsers() {
+        return httpClient.get('/api/users');
+      }
+    `;
+
+    const calls = detectApiCalls(code);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('/api/users');
+    expect(calls[0]!.clientType).toBe('axios');
+  });
+});

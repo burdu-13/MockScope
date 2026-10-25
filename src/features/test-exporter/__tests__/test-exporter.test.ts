@@ -59,4 +59,14 @@ describe('test-exporter', () => {
     expect(code).toContain("http.delete('/api/v1/users/usr_1'");
     expect(code).toContain('status: 204');
   });
+  it('should default to status 200 when mock status code is omitted', () => {
+    const rawPayload = { message: 'success' };
+    const mswCode = generateMswHandler(sampleCall, rawPayload as any);
+    expect(mswCode).toContain('status: 200');
+    expect(mswCode).toContain('"message": "success"');
+
+    const playwrightCode = generatePlaywrightSpec(sampleCall, rawPayload as any);
+    expect(playwrightCode).toContain('status: 200');
+    expect(playwrightCode).toContain('"message": "success"');
+  });
 });
