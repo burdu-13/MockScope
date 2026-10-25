@@ -394,11 +394,11 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window
           .showInformationMessage(
             `MockScope: Mock active for ${call.method} ${call.url}. 1-Click Connect dev server so your browser app calls hit this mock?`,
-            '⚡ 1-Click Connect',
+            '1-Click Connect',
             'Later'
           )
           .then((choice) => {
-            if (choice === '⚡ 1-Click Connect') {
+            if (choice === '1-Click Connect') {
               vscode.commands.executeCommand('mockscope.connectProject');
             }
           });
@@ -458,11 +458,11 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window
         .showInformationMessage(
           `MockScope: ${forceRegenerate ? `Regenerated all ${calls.length}` : `Generated ${targetCalls.length} new`} mocks! Connect your project dev server with 1 click so requests hit these mocks automatically?`,
-          '⚡ 1-Click Connect',
+          '1-Click Connect',
           'Later'
         )
         .then((choice) => {
-          if (choice === '⚡ 1-Click Connect') {
+          if (choice === '1-Click Connect') {
             vscode.commands.executeCommand('mockscope.connectProject');
           }
         });
@@ -636,7 +636,10 @@ export function activate(context: vscode.ExtensionContext): void {
         onToggleRoute: (routeId: string) => {
           const route = getRoutes().find((r) => r.id === routeId);
           if (route) {
-            route.enabled = !route.enabled;
+            route.enabled = !(route.enabled !== false);
+            if (runtimeProxy) runtimeProxy.addRoute(route);
+            if (cdpBridge) cdpBridge.addRoute(route);
+            schedulePersistRoutes();
             dashboardProvider?.refresh();
             WorkbenchPanel.currentPanel?.refresh();
           }
@@ -653,6 +656,25 @@ export function activate(context: vscode.ExtensionContext): void {
           vscode.window.showInformationMessage(`MockScope: Copied ${label} to clipboard.`);
         },
         onOpenEndpointInBrowser: openEndpointInBrowser,
+        onOpenSourceLocation: async (fileName: string, line: number, character = 0) => {
+          try {
+            const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const resolvedPath =
+              path.isAbsolute(fileName) || !wsRoot ? fileName : path.join(wsRoot, fileName);
+            if (!fs.existsSync(resolvedPath)) {
+              vscode.window.showWarningMessage(`MockScope: File not found: ${fileName}`);
+              return;
+            }
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolvedPath));
+            const pos = new vscode.Position(Math.max(0, line), Math.max(0, character));
+            await vscode.window.showTextDocument(doc, {
+              selection: new vscode.Range(pos, pos),
+              preview: true,
+            });
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to open file: ${err?.message || fileName}`);
+          }
+        },
         onScanWorkspace: scanWorkspaceApiCalls,
         onMockDetectedCall: async (call) => {
           await autoMockCall(call, true);
@@ -671,7 +693,10 @@ export function activate(context: vscode.ExtensionContext): void {
     (routeId) => {
       const current = getRoutes().find((r) => r.id === routeId);
       if (current) {
-        current.enabled = !current.enabled;
+        current.enabled = !(current.enabled !== false);
+        if (runtimeProxy) runtimeProxy.addRoute(current);
+        if (cdpBridge) cdpBridge.addRoute(current);
+        schedulePersistRoutes();
         dashboardProvider?.refresh();
         WorkbenchPanel.currentPanel?.refresh();
       }
@@ -882,10 +907,10 @@ export function activate(context: vscode.ExtensionContext): void {
         } catch (err: any) {
           const choice = await vscode.window.showInformationMessage(
             `MockScope: Debugging port ${port} is not open. Launch Chrome/Edge with debugging enabled so requests are intercepted automatically without touching any proxy config?`,
-            '🚀 Launch Browser with Debugging',
+            'Launch Browser with Debugging',
             'Cancel'
           );
-          if (choice === '🚀 Launch Browser with Debugging') {
+          if (choice === 'Launch Browser with Debugging') {
             try {
               if (!cdpBridge || cdpBridge.debugPort !== port) {
                 cdpBridge = new CdpBridgeController(port);
@@ -990,11 +1015,11 @@ export function activate(context: vscode.ExtensionContext): void {
           vscode.window
             .showInformationMessage(
               `MockScope: Mock active for ${call.method} ${call.url}. Connect your dev server in 1 click so requests hit this mock?`,
-              '⚡ 1-Click Connect',
+              '1-Click Connect',
               'Dismiss'
             )
             .then((choice) => {
-              if (choice === '⚡ 1-Click Connect') {
+              if (choice === '1-Click Connect') {
                 vscode.commands.executeCommand('mockscope.connectProject');
               }
             });
@@ -1009,6 +1034,7 @@ export function activate(context: vscode.ExtensionContext): void {
           );
         }
         dashboardProvider?.refresh();
+        WorkbenchPanel.currentPanel?.refresh();
       }
     )
   );

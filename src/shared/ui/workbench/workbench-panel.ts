@@ -1,4 +1,3 @@
-
 import * as vscode from 'vscode';
 import {
   assertLoopbackHost,
@@ -24,6 +23,7 @@ export interface WorkbenchActions {
   onMockDetectedCall: (call: DetectedApiCall) => Promise<void>;
   onMockAllCalls: (calls: DetectedApiCall[], force?: boolean) => Promise<void>;
   onOpenEndpointInBrowser: (url: string) => Promise<void>;
+  onOpenSourceLocation?: (fileName: string, line: number, character?: number) => Promise<void>;
   onSwitchRouteScenario?: (routeId: string, scenario: string) => void;
   onToggleHybridSeeder?: () => Promise<void>;
 }
@@ -130,6 +130,13 @@ export class WorkbenchPanel {
           case 'openEndpointInBrowser':
             await this.actions.onOpenEndpointInBrowser(message.url);
             break;
+          case 'openSourceLocation':
+            await this.actions.onOpenSourceLocation?.(
+              message.fileName,
+              message.line,
+              message.character
+            );
+            break;
           case 'scanWorkspace': {
             this._panel.webview.postMessage({ type: 'scanStart' });
             try {
@@ -137,7 +144,10 @@ export class WorkbenchPanel {
               this.refresh();
               this._panel.webview.postMessage({ type: 'discoveredCalls', calls });
             } catch (err: any) {
-              this._panel.webview.postMessage({ type: 'scanError', error: err?.message || 'Failed to scan workspace' });
+              this._panel.webview.postMessage({
+                type: 'scanError',
+                error: err?.message || 'Failed to scan workspace',
+              });
             }
             break;
           }
@@ -154,12 +164,18 @@ export class WorkbenchPanel {
           case 'ready':
             this.refresh();
             this._panel.webview.postMessage({ type: 'scanStart' });
-            this.actions.onScanWorkspace().then((calls) => {
-              this.refresh();
-              this._panel.webview.postMessage({ type: 'discoveredCalls', calls });
-            }).catch((err: any) => {
-              this._panel.webview.postMessage({ type: 'scanError', error: err?.message || 'Failed to scan workspace' });
-            });
+            this.actions
+              .onScanWorkspace()
+              .then((calls) => {
+                this.refresh();
+                this._panel.webview.postMessage({ type: 'discoveredCalls', calls });
+              })
+              .catch((err: any) => {
+                this._panel.webview.postMessage({
+                  type: 'scanError',
+                  error: err?.message || 'Failed to scan workspace',
+                });
+              });
             break;
         }
       },

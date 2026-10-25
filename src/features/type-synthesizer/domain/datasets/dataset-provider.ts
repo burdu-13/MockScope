@@ -233,7 +233,7 @@ export class DatasetProvider {
     return new Promise((resolve, reject) => {
       const req = https.get(url, { timeout: 2500 }, (res) => {
         if (res.statusCode !== 200) {
-          res.resume();
+          res.destroy();
           reject(new Error(`Status ${res.statusCode}`));
           return;
         }
@@ -269,7 +269,7 @@ export class DatasetProvider {
         },
         (res) => {
           if (res.statusCode !== 200) {
-            res.resume();
+            res.destroy();
             resolve(false);
             return;
           }

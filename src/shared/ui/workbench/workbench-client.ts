@@ -1,4 +1,3 @@
-
 import { ICONS } from './workbench-templates';
 
 export function getWorkbenchClientScript(nonce: string): string {
@@ -45,8 +44,18 @@ export function getWorkbenchClientScript(nonce: string): string {
 
     let activeTab = 'discovered'; // 'discovered' | 'traffic' | 'routes'
     let selectedId = null;
+    let pendingRouteTarget = null; // { method, url } when synthesizing a mock from inspector
     let filterText = '';
     let filterMethod = 'ALL';
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     const toggleHybridSeederBtn = document.getElementById('toggleHybridSeederBtn');
     const toggleConnectBtn = document.getElementById('toggleConnectBtn');
@@ -63,38 +72,33 @@ export function getWorkbenchClientScript(nonce: string): string {
     const itemList = document.getElementById('itemList');
     const rightPane = document.getElementById('rightPane');
 
+    function setActiveTab(tab) {
+      activeTab = tab;
+      tabDiscovered.classList.toggle('active', tab === 'discovered');
+      tabDiscovered.setAttribute('aria-selected', tab === 'discovered' ? 'true' : 'false');
+      tabRoutes.classList.toggle('active', tab === 'routes');
+      tabRoutes.setAttribute('aria-selected', tab === 'routes' ? 'true' : 'false');
+      tabTraffic.classList.toggle('active', tab === 'traffic');
+      tabTraffic.setAttribute('aria-selected', tab === 'traffic' ? 'true' : 'false');
+      if (clearBtn) {
+        clearBtn.title = tab === 'traffic' ? 'Clear recorded traffic ledger' : 'Clear search filter (Esc)';
+      }
+    }
+
     tabDiscovered.addEventListener('click', () => {
-      activeTab = 'discovered';
-      tabDiscovered.classList.add('active');
-      tabDiscovered.setAttribute('aria-selected', 'true');
-      tabTraffic.classList.remove('active');
-      tabTraffic.setAttribute('aria-selected', 'false');
-      tabRoutes.classList.remove('active');
-      tabRoutes.setAttribute('aria-selected', 'false');
+      setActiveTab('discovered');
       selectedId = null;
       render();
     });
 
     tabTraffic.addEventListener('click', () => {
-      activeTab = 'traffic';
-      tabTraffic.classList.add('active');
-      tabTraffic.setAttribute('aria-selected', 'true');
-      tabDiscovered.classList.remove('active');
-      tabDiscovered.setAttribute('aria-selected', 'false');
-      tabRoutes.classList.remove('active');
-      tabRoutes.setAttribute('aria-selected', 'false');
+      setActiveTab('traffic');
       selectedId = null;
       render();
     });
 
     tabRoutes.addEventListener('click', () => {
-      activeTab = 'routes';
-      tabRoutes.classList.add('active');
-      tabRoutes.setAttribute('aria-selected', 'true');
-      tabDiscovered.classList.remove('active');
-      tabDiscovered.setAttribute('aria-selected', 'false');
-      tabTraffic.classList.remove('active');
-      tabTraffic.setAttribute('aria-selected', 'false');
+      setActiveTab('routes');
       selectedId = null;
       render();
     });
@@ -126,11 +130,13 @@ export function getWorkbenchClientScript(nonce: string): string {
       vscode.postMessage({ type: 'scanWorkspace' });
     });
     clearBtn.addEventListener('click', () => {
-      if (activeTab === 'traffic') {
+      if (activeTab === 'traffic' && !filterText && filterMethod === 'ALL') {
         vscode.postMessage({ type: 'clearTraffic' });
       } else {
         filterInput.value = '';
         filterText = '';
+        methodFilter.value = 'ALL';
+        filterMethod = 'ALL';
         renderList();
       }
     });
@@ -146,10 +152,7 @@ export function getWorkbenchClientScript(nonce: string): string {
     });
 
     addMockBtn.addEventListener('click', () => {
-      activeTab = 'routes';
-      tabRoutes.classList.add('active');
-      tabDiscovered.classList.remove('active');
-      tabTraffic.classList.remove('active');
+      setActiveTab('routes');
       selectedId = 'NEW_ROUTE';
       render();
     });
@@ -157,6 +160,18 @@ export function getWorkbenchClientScript(nonce: string): string {
     window.addEventListener('message', (event) => {
       if (event.data.type === 'stateUpdate') {
         state = { ...state, ...event.data };
+        if (pendingRouteTarget && Array.isArray(state.routes)) {
+          const matched = state.routes.find(
+            (r) =>
+              r.urlPattern === pendingRouteTarget.url &&
+              (r.method === pendingRouteTarget.method || r.method === '*')
+          );
+          if (matched) {
+            setActiveTab('routes');
+            selectedId = matched.id;
+            pendingRouteTarget = null;
+          }
+        }
         render();
       } else if (event.data.type === 'scanStart') {
         state.isScanning = true;
@@ -188,52 +203,6 @@ export function getWorkbenchClientScript(nonce: string): string {
         buttonElement.innerHTML = originalHtml;
         buttonElement.classList.remove('btn-success');
       }, 1800);
-    }
-
-    function getPreviewVectorSvg(bodyText) {
-      const match = (bodyText || '').match(/data:image\\/svg\\+xml[^\\s"']+/);
-      if (match) return match[0];
-
-      const lower = (bodyText || '').toLowerCase();
-      let type = 'image';
-      let label = 'Media Asset';
-      let width = 600;
-      let height = 400;
-
-      if (lower.includes('poster')) {
-        type = 'poster';
-        label = 'Movie Poster';
-        width = 500;
-        height = 750;
-      } else if (lower.includes('avatar') || lower.includes('profile')) {
-        type = 'avatar';
-        label = 'User Avatar';
-        width = 160;
-        height = 160;
-      } else if (lower.includes('backdrop') || lower.includes('banner')) {
-        type = 'backdrop';
-        label = 'Backdrop Banner';
-        width = 1280;
-        height = 720;
-      }
-
-      const centerX = width / 2;
-      const iconY = height * 0.42;
-      const textY = height * 0.62;
-      const subY = height * 0.72;
-
-      let iconSvg = '';
-      if (type === 'avatar') {
-        iconSvg = '<circle cx="' + centerX + '" cy="' + (iconY - 10) + '" r="28" fill="#64748b" /><path d="M ' + (centerX - 35) + ' ' + (iconY + 36) + ' C ' + (centerX - 35) + ' ' + (iconY + 16) + ', ' + (centerX + 35) + ' ' + (iconY + 16) + ', ' + (centerX + 35) + ' ' + (iconY + 36) + ' Z" fill="#64748b" />';
-      } else if (type === 'poster') {
-        iconSvg = '<rect x="' + (centerX - 32) + '" y="' + (iconY - 40) + '" width="64" height="80" rx="4" fill="none" stroke="#60a5fa" stroke-width="3" /><circle cx="' + (centerX - 16) + '" cy="' + (iconY - 24) + '" r="5" fill="#60a5fa" /><circle cx="' + (centerX + 16) + '" cy="' + (iconY - 24) + '" r="5" fill="#60a5fa" /><line x1="' + (centerX - 32) + '" y1="' + iconY + '" x2="' + (centerX + 32) + '" y2="' + iconY + '" stroke="#60a5fa" stroke-width="2" /><circle cx="' + (centerX - 16) + '" cy="' + (iconY + 20) + '" r="5" fill="#60a5fa" /><circle cx="' + (centerX + 16) + '" cy="' + (iconY + 20) + '" r="5" fill="#60a5fa" />';
-      } else {
-        iconSvg = '<rect x="' + (centerX - 40) + '" y="' + (iconY - 28) + '" width="80" height="56" rx="6" fill="none" stroke="#94a3b8" stroke-width="3" /><circle cx="' + (centerX - 18) + '" cy="' + (iconY - 10) + '" r="7" fill="#94a3b8" /><path d="M ' + (centerX - 32) + ' ' + (iconY + 20) + ' L ' + (centerX - 6) + ' ' + (iconY - 2) + ' L ' + (centerX + 14) + ' ' + (iconY + 14) + ' L ' + (centerX + 32) + ' ' + (iconY + 6) + '" fill="none" stroke="#94a3b8" stroke-width="3" stroke-linecap="round" />';
-      }
-
-      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0f172a" /><stop offset="100%" stop-color="#1e293b" /></linearGradient></defs><rect width="100%" height="100%" fill="url(#grad)" /><rect x="2" y="2" width="' + (width - 4) + '" height="' + (height - 4) + '" fill="none" stroke="#334155" stroke-width="2" rx="4" />' + iconSvg + '<text x="' + centerX + '" y="' + textY + '" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="' + Math.max(12, Math.floor(width * 0.045)) + '" fill="#f8fafc" font-weight="600" text-anchor="middle">' + label + '</text><text x="' + centerX + '" y="' + subY + '" font-family="monospace" font-size="' + Math.max(10, Math.floor(width * 0.028)) + '" fill="#64748b" text-anchor="middle">' + width + 'x' + height + ' [MockScope Offline]</text></svg>';
-
-      return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
     }
 
     function syntaxHighlightJson(json) {
@@ -339,7 +308,7 @@ export function getWorkbenchClientScript(nonce: string): string {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         const saveBtn = document.getElementById('saveRouteBtn');
-        if (saveBtn) {
+        if (saveBtn && !saveBtn.disabled) {
           saveBtn.click();
         }
         return;
@@ -374,15 +343,15 @@ export function getWorkbenchClientScript(nonce: string): string {
             return matchUrl && matchMethod;
           });
         } else if (activeTab === 'traffic') {
-          currentItems = (state.traffic || []).filter(t => {
+          currentItems = [...(state.traffic || [])].filter(t => {
             const matchUrl = t.url.toLowerCase().includes(filterText);
             const matchMethod = filterMethod === 'ALL' || t.method.toUpperCase() === filterMethod;
             return matchUrl && matchMethod;
-          });
+          }).reverse();
         } else {
           currentItems = (state.routes || []).filter(r => {
             const matchUrl = r.urlPattern.toLowerCase().includes(filterText);
-            const matchMethod = filterMethod === 'ALL' || r.method.toUpperCase() === filterMethod;
+            const matchMethod = filterMethod === 'ALL' || r.method.toUpperCase() === filterMethod || r.method === '*';
             return matchUrl && matchMethod;
           });
         }
@@ -394,11 +363,19 @@ export function getWorkbenchClientScript(nonce: string): string {
             const nextIdx = currentIdx < currentItems.length - 1 ? currentIdx + 1 : 0;
             selectedId = currentItems[nextIdx].id;
             render();
+            const selectedCard = itemList.querySelector('.list-card.selected');
+            if (selectedCard && selectedCard.scrollIntoView) {
+              selectedCard.scrollIntoView({ block: 'nearest' });
+            }
           } else if (e.key === 'ArrowUp' || e.key === 'k') {
             e.preventDefault();
             const prevIdx = currentIdx > 0 ? currentIdx - 1 : currentItems.length - 1;
             selectedId = currentItems[prevIdx].id;
             render();
+            const selectedCard = itemList.querySelector('.list-card.selected');
+            if (selectedCard && selectedCard.scrollIntoView) {
+              selectedCard.scrollIntoView({ block: 'nearest' });
+            }
           }
         }
       }
@@ -551,8 +528,8 @@ export function getWorkbenchClientScript(nonce: string): string {
           errorPrompt.style.padding = '30px 10px';
           errorPrompt.innerHTML = \`
             <div class="empty-icon-wrapper" style="border-color: var(--danger); color: var(--danger);">\${ICONS.trash}</div>
-            <strong style="color: #fff;">AST Workspace Scan Failed</strong>
-            <span style="max-width: 280px; font-size: 11px; color: var(--danger);">\${state.scanError}</span>
+            <strong>AST Workspace Scan Failed</strong>
+            <span style="max-width: 280px; font-size: 11px; color: var(--danger);">\${escapeHtml(state.scanError)}</span>
             <button id="retryScanBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
               \${ICONS.search}
               <span>Retry Scan</span>
@@ -639,13 +616,15 @@ export function getWorkbenchClientScript(nonce: string): string {
           emptyFilter.style.padding = '30px 10px';
           emptyFilter.innerHTML = \`
             <div class="empty-icon-wrapper">\${ICONS.search}</div>
-            <strong style="color: #fff;">No matching endpoints</strong>
-            <span style="max-width: 280px; font-size: 11px;">No detected endpoints match your filter "<strong>\${filterText}</strong>".</span>
+            <strong>No matching endpoints</strong>
+            <span style="max-width: 280px; font-size: 11px;">No detected endpoints match your filter "<strong>\${escapeHtml(filterText)}</strong>".</span>
             <button id="clearSearchBtn" class="btn-compact" nonce="${nonce}" style="margin-top: 6px;">Clear Filter</button>
           \`;
           emptyFilter.querySelector('#clearSearchBtn').addEventListener('click', () => {
             filterInput.value = '';
             filterText = '';
+            methodFilter.value = 'ALL';
+            filterMethod = 'ALL';
             renderList();
           });
           itemList.appendChild(emptyFilter);
@@ -658,7 +637,7 @@ export function getWorkbenchClientScript(nonce: string): string {
           empty.style.padding = '30px 10px';
           empty.innerHTML = \`
             <div class="empty-icon-wrapper">\${ICONS.radar}</div>
-            <strong style="color: #fff;">No API calls detected yet</strong>
+            <strong>No API calls detected yet</strong>
             <span style="max-width: 280px; font-size: 11px;">MockScope automatically scans fetch, axios, and useQuery endpoints across your workspace.</span>
             <button id="emptyScanBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
               \${ICONS.search}
@@ -673,22 +652,26 @@ export function getWorkbenchClientScript(nonce: string): string {
         }
 
         filtered.forEach(call => {
-          const isAlreadyMocked = state.routes.some(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
+          const matchedRoute = state.routes.find(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
+          const isAlreadyMocked = Boolean(matchedRoute);
+          const isSelected = selectedId === call.id;
           const card = document.createElement('div');
-          card.className = 'list-card' + (selectedId === call.id ? ' selected' : '');
+          card.className = 'list-card' + (isSelected ? ' selected' : '');
+          card.setAttribute('role', 'option');
+          card.setAttribute('aria-selected', isSelected ? 'true' : 'false');
           const filename = (call.fileName || '').split(/[\\\\/]/).pop() || '';
 
           card.innerHTML = \`
             <div class="card-top">
-              <span class="method-tag \${getMethodTagClass(call.method)}">\${call.method}</span>
-              <span class="path-text" title="\${call.url}">\${call.url}</span>
-              \${call.typeArgument ? \`<span class="type-tag" title="Generic return type">&lt;\${call.typeArgument}&gt;</span>\` : ''}
+              <span class="method-tag \${getMethodTagClass(call.method)}">\${escapeHtml(call.method)}</span>
+              <span class="path-text" title="\${escapeHtml(call.url)}">\${escapeHtml(call.url)}</span>
+              \${call.typeArgument ? \`<span class="type-tag" title="Generic return type: \${escapeHtml(call.typeArgument)}">&lt;\${escapeHtml(call.typeArgument)}&gt;</span>\` : ''}
             </div>
             <div class="card-sub">
-              <span>\${call.clientType} in \${filename}</span>
+              <span>\${escapeHtml(call.clientType)}\${filename ? ' in ' + escapeHtml(filename) : ''}</span>
               \${isAlreadyMocked 
                 ? \`<span class="mock-status-pill mocked">\${ICONS.check} Active Mock</span>\` 
-                : \`<button class="mini-mock-btn btn-compact" style="padding: 2px 7px;">\${ICONS.plus} Mock</button>\`
+                : \`<button type="button" class="mini-mock-btn btn-compact" style="padding: 2px 7px;">\${ICONS.plus} Mock</button>\`
               }
             </div>
           \`;
@@ -720,13 +703,15 @@ export function getWorkbenchClientScript(nonce: string): string {
           emptyFilter.style.padding = '30px 10px';
           emptyFilter.innerHTML = \`
             <div class="empty-icon-wrapper">\${ICONS.search}</div>
-            <strong style="color: #fff;">No matching traffic</strong>
-            <span style="max-width: 280px; font-size: 11px;">No recorded requests match "<strong>\${filterText}</strong>".</span>
+            <strong>No matching traffic</strong>
+            <span style="max-width: 280px; font-size: 11px;">No recorded requests match "<strong>\${escapeHtml(filterText)}</strong>".</span>
             <button id="clearTrafficFilterBtn" class="btn-compact" nonce="${nonce}" style="margin-top: 6px;">Clear Filter</button>
           \`;
           emptyFilter.querySelector('#clearTrafficFilterBtn').addEventListener('click', () => {
             filterInput.value = '';
             filterText = '';
+            methodFilter.value = 'ALL';
+            filterMethod = 'ALL';
             renderList();
           });
           itemList.appendChild(emptyFilter);
@@ -739,7 +724,7 @@ export function getWorkbenchClientScript(nonce: string): string {
           empty.style.padding = '30px 10px';
           empty.innerHTML = \`
             <div class="empty-icon-wrapper">\${ICONS.activity}</div>
-            <strong style="color: #fff;">No traffic recorded yet</strong>
+            <strong>No traffic recorded yet</strong>
             <span style="max-width: 280px; font-size: 11px;">Make a request via proxy (127.0.0.1:45990) or attach CDP to record real-time requests.</span>
           \`;
           itemList.appendChild(empty);
@@ -747,12 +732,15 @@ export function getWorkbenchClientScript(nonce: string): string {
         }
 
         [...filtered].reverse().forEach(t => {
+          const isSelected = selectedId === t.id;
           const card = document.createElement('div');
-          card.className = 'list-card' + (selectedId === t.id ? ' selected' : '');
+          card.className = 'list-card' + (isSelected ? ' selected' : '');
+          card.setAttribute('role', 'option');
+          card.setAttribute('aria-selected', isSelected ? 'true' : 'false');
           card.innerHTML = \`
             <div class="card-top">
-              <span class="method-tag \${getMethodTagClass(t.method)}">\${t.method}</span>
-              <span class="path-text" title="\${t.url}">\${t.url}</span>
+              <span class="method-tag \${getMethodTagClass(t.method)}">\${escapeHtml(t.method)}</span>
+              <span class="path-text" title="\${escapeHtml(t.url)}">\${escapeHtml(t.url)}</span>
               <span class="status-code-tag \${getStatusClass(t.statusCode)}">\${t.statusCode}</span>
             </div>
             <div class="card-sub">
@@ -779,13 +767,15 @@ export function getWorkbenchClientScript(nonce: string): string {
           emptyFilter.style.padding = '30px 10px';
           emptyFilter.innerHTML = \`
             <div class="empty-icon-wrapper">\${ICONS.search}</div>
-            <strong style="color: #fff;">No matching mock routes</strong>
-            <span style="max-width: 280px; font-size: 11px;">No active routes match "<strong>\${filterText}</strong>".</span>
+            <strong>No matching mock routes</strong>
+            <span style="max-width: 280px; font-size: 11px;">No active routes match "<strong>\${escapeHtml(filterText)}</strong>".</span>
             <button id="clearRoutesFilterBtn" class="btn-compact" nonce="${nonce}" style="margin-top: 6px;">Clear Filter</button>
           \`;
           emptyFilter.querySelector('#clearRoutesFilterBtn').addEventListener('click', () => {
             filterInput.value = '';
             filterText = '';
+            methodFilter.value = 'ALL';
+            filterMethod = 'ALL';
             renderList();
           });
           itemList.appendChild(emptyFilter);
@@ -798,7 +788,7 @@ export function getWorkbenchClientScript(nonce: string): string {
           empty.style.padding = '30px 10px';
           empty.innerHTML = \`
             <div class="empty-icon-wrapper">\${ICONS.layers}</div>
-            <strong style="color: #fff;">No mock routes active</strong>
+            <strong>No mock routes active</strong>
             <span style="max-width: 280px; font-size: 11px;">Configure mock endpoints or auto-mock from the Discovered APIs tab.</span>
             <button id="emptyCreateBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
               \${ICONS.plus}
@@ -814,22 +804,33 @@ export function getWorkbenchClientScript(nonce: string): string {
         }
 
         filtered.forEach(r => {
+          const isSelected = selectedId === r.id;
+          const isEnabled = r.enabled !== false;
           const card = document.createElement('div');
-          card.className = 'list-card' + (selectedId === r.id ? ' selected' : '');
+          card.className = 'list-card' + (isSelected ? ' selected' : '') + (!isEnabled ? ' disabled-route' : '');
+          card.setAttribute('role', 'option');
+          card.setAttribute('aria-selected', isSelected ? 'true' : 'false');
           card.innerHTML = \`
             <div class="card-top">
-              <span class="method-tag \${getMethodTagClass(r.method)}">\${r.method}</span>
-              <span class="path-text" title="\${r.urlPattern}">\${r.urlPattern}</span>
+              <span class="method-tag \${getMethodTagClass(r.method)}">\${escapeHtml(r.method)}</span>
+              <span class="path-text" title="\${escapeHtml(r.urlPattern)}">\${escapeHtml(r.urlPattern)}</span>
               <span class="status-code-tag \${getStatusClass(r.statusCode)}">\${r.statusCode}</span>
             </div>
             <div class="card-sub">
-              <span style="display: flex; align-items: center; gap: 5px;">
-                <span class="status-dot \${r.enabled ? 'online' : 'offline'}"></span>
-                <span>\${r.enabled ? 'Active' : 'Disabled'}</span>
-              </span>
+              <button type="button" class="route-toggle-pill" title="\${isEnabled ? 'Click to disable route' : 'Click to enable route'}" aria-pressed="\${isEnabled ? 'true' : 'false'}">
+                <span class="status-dot \${isEnabled ? 'online' : 'offline'}"></span>
+                <span>\${isEnabled ? 'Active' : 'Disabled'}</span>
+              </button>
               <span>\${r.delayMs ? r.delayMs + 'ms delay' : 'Instant'}</span>
             </div>
           \`;
+          const togglePill = card.querySelector('.route-toggle-pill');
+          if (togglePill) {
+            togglePill.addEventListener('click', (e) => {
+              e.stopPropagation();
+              vscode.postMessage({ type: 'toggleRoute', routeId: r.id });
+            });
+          }
           card.addEventListener('click', () => {
             selectedId = r.id;
             render();
@@ -868,71 +869,106 @@ export function getWorkbenchClientScript(nonce: string): string {
       if (activeTab === 'discovered') {
         const call = (state.discoveredCalls || []).find(c => c.id === selectedId);
         if (!call) return;
-        const isAlreadyMocked = state.routes.some(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
+        const matchedRoute = state.routes.find(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
+        const isAlreadyMocked = Boolean(matchedRoute);
 
         rightPane.innerHTML = \`
           <div class="inspector-header">
             <div class="inspector-title">
-              <span class="method-tag \${getMethodTagClass(call.method)}">\${call.method}</span>
-              <span class="path-display" title="\${call.url}">\${call.url}</span>
+              <span class="method-tag \${getMethodTagClass(call.method)}">\${escapeHtml(call.method)}</span>
+              <span class="path-display" title="\${escapeHtml(call.url)}">\${escapeHtml(call.url)}</span>
             </div>
             <div class="inspector-actions">
               \${isAlreadyMocked ? \`
-                <button id="openDiscoveredInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
+                <button type="button" id="openDiscoveredInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
                   \${ICONS.external}
                   <span>Open in Browser</span>
                 </button>
+                <button type="button" id="viewActiveRouteBtn" nonce="${nonce}" title="Inspect and edit the active mock route">
+                  \${ICONS.layers}
+                  <span>Edit Route</span>
+                </button>
               \` : ''}
-              <button id="inspectMockBtn" class="accent" nonce="${nonce}">
+              <button type="button" id="inspectMockBtn" class="accent" nonce="${nonce}">
                 \${ICONS.wand}
-                <span>Auto-Synthesize Mock</span>
+                <span>\${isAlreadyMocked ? 'Regenerate Mock' : 'Auto-Synthesize Mock'}</span>
               </button>
             </div>
           </div>
           <div class="inspector-body">
             <div class="form-row">
               <div class="form-group" style="flex: 1;">
-                <label>HTTP Client</label>
-                <input type="text" readonly value="\${call.clientType}">
+                <label for="discClientInput">HTTP Client</label>
+                <input type="text" id="discClientInput" readonly value="\${escapeHtml(call.clientType)}">
               </div>
               <div class="form-group" style="flex: 1;">
-                <label>TypeScript Generic Return Type</label>
-                <input type="text" readonly value="\${call.typeArgument || 'None (auto-inferred)'}">
+                <label for="discTypeInput">TypeScript Generic Return Type</label>
+                <input type="text" id="discTypeInput" readonly value="\${escapeHtml(call.typeArgument || 'None (auto-inferred)')}">
               </div>
             </div>
 
             <div class="form-group">
-              <label>Source Code Location</label>
-              <input type="text" readonly value="\${call.fileName || 'source.ts'} (Line \${call.range.start.line + 1})">
+              <label for="discLocInput">Source Code Location</label>
+              <div class="input-with-action">
+                <input type="text" id="discLocInput" readonly value="\${escapeHtml(call.fileName || 'source.ts')} (Line \${call.range.start.line + 1})">
+                \${call.fileName ? \`
+                  <button type="button" id="openSourceBtn" nonce="${nonce}" title="Jump to call site in VS Code editor">
+                    \${ICONS.code}
+                    <span>Open in Editor</span>
+                  </button>
+                \` : ''}
+              </div>
             </div>
 
             <div class="form-group">
               <label>
                 <span>Detected Expression in Source</span>
-                <button id="copyExprBtn" class="btn-compact" nonce="${nonce}" title="Copy code expression">\${ICONS.copy} Copy</button>
+                <button type="button" id="copyExprBtn" class="btn-compact" nonce="${nonce}" title="Copy code expression">\${ICONS.copy} Copy</button>
               </label>
-              <div class="tab-content-panel">\${call.rawExpression}</div>
+              <div class="tab-content-panel">\${escapeHtml(call.rawExpression)}</div>
             </div>
 
             <div class="info-callout">
-              <strong>Zero-Configuration Mock Guarantee:</strong> MockScope analyzes this call site's TypeScript type <code>&lt;\${call.typeArgument || 'Object'}&gt;</code> and generates matching realistic data deterministically without requiring manual schema definitions.
+              <strong>Zero-Configuration Mock Guarantee:</strong> MockScope analyzes this call site's TypeScript type <code>&lt;\${escapeHtml(call.typeArgument || 'Object')}&gt;</code> and generates matching realistic data deterministically without requiring manual schema definitions.
             </div>
           </div>
         \`;
 
         document.getElementById('inspectMockBtn').addEventListener('click', () => {
+          pendingRouteTarget = { method: call.method, url: call.url };
           vscode.postMessage({ type: 'mockDetectedCall', call });
-          activeTab = 'routes';
-          tabRoutes.classList.add('active');
-          tabDiscovered.classList.remove('active');
-          tabTraffic.classList.remove('active');
-          render();
+          if (matchedRoute) {
+            setActiveTab('routes');
+            selectedId = matchedRoute.id;
+            render();
+          }
         });
+
+        const viewActiveRouteBtn = document.getElementById('viewActiveRouteBtn');
+        if (viewActiveRouteBtn && matchedRoute) {
+          viewActiveRouteBtn.addEventListener('click', () => {
+            setActiveTab('routes');
+            selectedId = matchedRoute.id;
+            render();
+          });
+        }
 
         const openDiscoveredInBrowserBtn = document.getElementById('openDiscoveredInBrowserBtn');
         if (openDiscoveredInBrowserBtn) {
           openDiscoveredInBrowserBtn.addEventListener('click', () => {
             vscode.postMessage({ type: 'openEndpointInBrowser', url: call.url });
+          });
+        }
+
+        const openSourceBtn = document.getElementById('openSourceBtn');
+        if (openSourceBtn && call.fileName) {
+          openSourceBtn.addEventListener('click', () => {
+            vscode.postMessage({
+              type: 'openSourceLocation',
+              fileName: call.fileName,
+              line: call.range.start.line,
+              character: call.range.start.character || 0,
+            });
           });
         }
 
@@ -949,16 +985,16 @@ export function getWorkbenchClientScript(nonce: string): string {
         rightPane.innerHTML = \`
           <div class="inspector-header">
             <div class="inspector-title">
-              <span class="method-tag \${getMethodTagClass(item.method)}">\${item.method}</span>
-              <span class="path-display" title="\${item.url}">\${item.url}</span>
+              <span class="method-tag \${getMethodTagClass(item.method)}">\${escapeHtml(item.method)}</span>
+              <span class="path-display" title="\${escapeHtml(item.url)}">\${escapeHtml(item.url)}</span>
               <span class="status-code-tag \${getStatusClass(item.statusCode)}">\${item.statusCode}</span>
             </div>
             <div class="inspector-actions">
-              <button id="openTrafficInBrowserBtn" nonce="${nonce}" title="Preview endpoint in browser">
+              <button type="button" id="openTrafficInBrowserBtn" nonce="${nonce}" title="Preview endpoint in browser">
                 \${ICONS.external}
                 <span>Open in Browser</span>
               </button>
-              <button id="promoteMockBtn" class="primary" nonce="${nonce}">
+              <button type="button" id="promoteMockBtn" class="primary" nonce="${nonce}">
                 \${ICONS.plus}
                 <span>Convert to Mock Route</span>
               </button>
@@ -967,39 +1003,39 @@ export function getWorkbenchClientScript(nonce: string): string {
           <div class="inspector-body">
             <div class="form-row">
               <div class="form-group" style="flex: 1;">
-                <label>Status & Latency</label>
-                <input type="text" readonly value="\${item.statusCode} (\${item.durationMs}ms)">
+                <label for="trafficLatencyInput">Status & Latency</label>
+                <input type="text" id="trafficLatencyInput" readonly value="\${item.statusCode} (\${item.durationMs}ms)">
               </div>
               <div class="form-group" style="flex: 1;">
-                <label>Interception Mode</label>
-                <input type="text" readonly value="\${item.isMocked ? 'Mocked Response' : 'Upstream Passthrough'}">
+                <label for="trafficModeInput">Interception Mode</label>
+                <input type="text" id="trafficModeInput" readonly value="\${item.isMocked ? 'Mocked Response' : 'Upstream Passthrough'}">
               </div>
             </div>
 
             <div class="form-group">
               <label>
                 <span>Request Headers (Sanitized)</span>
-                <button id="copyReqHdrBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
+                <button type="button" id="copyReqHdrBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
               </label>
-              <div class="tab-content-panel">\${JSON.stringify(item.requestHeaders, null, 2)}</div>
+              <div class="tab-content-panel">\${escapeHtml(JSON.stringify(item.requestHeaders, null, 2))}</div>
             </div>
 
             \${item.requestBody ? \`
               <div class="form-group">
                 <label>Request Body</label>
-                <div class="tab-content-panel">\${item.requestBody}</div>
+                <div class="tab-content-panel">\${escapeHtml(item.requestBody)}</div>
               </div>
             \` : ''}
 
             <div class="form-group">
               <label>Response Headers</label>
-              <div class="tab-content-panel">\${JSON.stringify(item.responseHeaders, null, 2)}</div>
+              <div class="tab-content-panel">\${escapeHtml(JSON.stringify(item.responseHeaders, null, 2))}</div>
             </div>
 
             <div class="form-group">
               <label>
                 <span>Response Body</span>
-                <button id="copyResBodyBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
+                <button type="button" id="copyResBodyBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
               </label>
               <div class="json-formatted-view">\${syntaxHighlightJson(item.responseBody || '(empty body)')}</div>
             </div>
@@ -1048,48 +1084,46 @@ export function getWorkbenchClientScript(nonce: string): string {
           };
 
           vscode.postMessage({ type: 'saveRoute', route: newRoute });
-          activeTab = 'routes';
-          tabRoutes.classList.add('active');
-          tabDiscovered.classList.remove('active');
-          tabTraffic.classList.remove('active');
+          setActiveTab('routes');
           selectedId = newRoute.id;
           render();
         });
       } else {
         let route = selectedId === 'NEW_ROUTE'
-          ? { id: 'route_' + Date.now(), method: 'GET', urlPattern: '/api/v1/resource', statusCode: 200, delayMs: 0, body: { message: 'Sample mock response' }, enabled: true }
+          ? { id: 'route_' + Date.now(), method: 'GET', urlPattern: '/api/v1/resource', statusCode: 200, delayMs: 0, body: { message: 'Sample mock response' }, enabled: true, source: 'manual' }
           : state.routes.find(r => r.id === selectedId);
 
         if (!route) return;
 
+        const isEnabled = route.enabled !== false;
         const bodyStr = typeof route.body === 'string' ? route.body : JSON.stringify(route.body, null, 2);
 
         rightPane.innerHTML = \`
           <div class="inspector-header">
             <div class="inspector-title">
-              <span class="method-tag \${getMethodTagClass(route.method)}">\${route.method}</span>
-              <span>\${selectedId === 'NEW_ROUTE' ? 'Create New Mock Route' : 'Edit Mock Route'}</span>
+              <span class="method-tag \${getMethodTagClass(route.method)}">\${escapeHtml(route.method)}</span>
+              <span class="path-display" title="\${escapeHtml(route.urlPattern)}">\${selectedId === 'NEW_ROUTE' ? 'Create New Mock Route' : escapeHtml(route.urlPattern)}</span>
             </div>
             <div class="inspector-actions">
               \${selectedId !== 'NEW_ROUTE' ? \`
-                <button id="openInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
+                <button type="button" id="openInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
                   \${ICONS.external}
                   <span>Open in Browser</span>
                 </button>
-                <button id="copyPlaywrightBtn" nonce="${nonce}">
+                <button type="button" id="copyPlaywrightBtn" nonce="${nonce}" title="Copy Playwright page.route() test spec">
                   \${ICONS.copy}
                   <span>Playwright</span>
                 </button>
-                <button id="copyMswBtn" nonce="${nonce}">
+                <button type="button" id="copyMswBtn" nonce="${nonce}" title="Copy MSW v2 http handler">
                   \${ICONS.copy}
                   <span>MSW v2</span>
                 </button>
-                <button id="deleteRouteBtn" class="danger" nonce="${nonce}">
+                <button type="button" id="deleteRouteBtn" class="danger" nonce="${nonce}" title="Delete this mock route">
                   \${ICONS.trash}
                   <span>Delete</span>
                 </button>
               \` : ''}
-              <button id="saveRouteBtn" class="primary" nonce="${nonce}">
+              <button type="button" id="saveRouteBtn" class="primary" nonce="${nonce}" title="Save route changes (Ctrl+S)">
                 \${ICONS.save}
                 <span>Save Route</span>
               </button>
@@ -1098,7 +1132,7 @@ export function getWorkbenchClientScript(nonce: string): string {
           <div class="inspector-body">
             <div class="form-row">
               <div class="form-group" style="width: 140px;">
-                <label>HTTP Method</label>
+                <label for="editMethod">HTTP Method</label>
                 <select id="editMethod" nonce="${nonce}">
                   <option value="GET" \${route.method === 'GET' ? 'selected' : ''}>GET</option>
                   <option value="POST" \${route.method === 'POST' ? 'selected' : ''}>POST</option>
@@ -1109,14 +1143,14 @@ export function getWorkbenchClientScript(nonce: string): string {
                 </select>
               </div>
               <div class="form-group" style="flex: 1;">
-                <label>URL Pattern (supports wildcards * and :param)</label>
-                <input type="text" id="editUrlPattern" value="\${route.urlPattern}" nonce="${nonce}">
+                <label for="editUrlPattern">URL Pattern (supports wildcards * and :param)</label>
+                <input type="text" id="editUrlPattern" value="\${escapeHtml(route.urlPattern)}" nonce="${nonce}">
               </div>
             </div>
 
             <div class="form-row">
               <div class="form-group" style="flex: 1;">
-                <label>HTTP Status Code</label>
+                <label for="editStatusCode">HTTP Status Code</label>
                 <select id="editStatusCode" nonce="${nonce}">
                   <option value="200" \${route.statusCode === 200 ? 'selected' : ''}>200 OK</option>
                   <option value="201" \${route.statusCode === 201 ? 'selected' : ''}>201 Created</option>
@@ -1129,9 +1163,12 @@ export function getWorkbenchClientScript(nonce: string): string {
                   <option value="500" \${route.statusCode === 500 ? 'selected' : ''}>500 Server Error</option>
                 </select>
               </div>
-              <div class="form-group" style="width: 140px;">
-                <label>Status</label>
-                <input type="text" readonly value="\${route.enabled !== false ? 'Active Mock' : 'Disabled'}" nonce="${nonce}">
+              <div class="form-group" style="width: 150px;">
+                <label for="toggleRouteStatusBtn">Route Status</label>
+                <button type="button" id="toggleRouteStatusBtn" class="status-toggle-btn" aria-pressed="\${isEnabled ? 'true' : 'false'}" nonce="${nonce}" title="Click to toggle between Active and Disabled">
+                  <span id="routeStateDot" class="status-dot \${isEnabled ? 'online' : 'offline'}"></span>
+                  <span id="routeStateText">\${isEnabled ? 'Active Mock' : 'Disabled'}</span>
+                </button>
               </div>
             </div>
 
@@ -1143,12 +1180,12 @@ export function getWorkbenchClientScript(nonce: string): string {
               <div class="advanced-content">
                 <div class="form-row">
                   <div class="form-group" style="flex: 1;">
-                    <label>Simulated Latency (ms)</label>
+                    <label for="editDelayMs">Simulated Latency (ms)</label>
                     <input type="number" id="editDelayMs" min="0" step="50" value="\${route.delayMs || 0}" nonce="${nonce}">
                   </div>
                   <div class="form-group" style="flex: 1;">
-                    <label>Route Source</label>
-                    <input type="text" readonly value="\${route.source || 'manual'}" nonce="${nonce}">
+                    <label for="routeSourceInput">Route Source</label>
+                    <input type="text" id="routeSourceInput" readonly value="\${escapeHtml(route.source || 'manual')}" nonce="${nonce}">
                   </div>
                 </div>
               </div>
@@ -1157,49 +1194,36 @@ export function getWorkbenchClientScript(nonce: string): string {
             \${route.variants ? \`
               <div class="form-group">
                 <label>Frontend UI Test States & Scenarios</label>
-                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                  <button type="button" class="btn-compact scenario-btn \${(!route.scenario || route.scenario === 'ok200') ? 'btn-success' : ''}" data-scenario="ok200" nonce="${nonce}" title="Populated Success State">200 Populated</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'loading200' ? 'btn-success' : ''}" data-scenario="loading200" nonce="${nonce}" title="Simulated 2000ms Latency for Testing Loaders">Loading (2s Delay)</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'empty200' ? 'btn-success' : ''}" data-scenario="empty200" nonce="${nonce}" title="Empty Collection Zero-State">Empty State (0 items)</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'bad400' ? 'btn-success' : ''}" data-scenario="bad400" nonce="${nonce}">400 Bad Request</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'unauth401' ? 'btn-success' : ''}" data-scenario="unauth401" nonce="${nonce}">401 Unauthorized</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'forbidden403' ? 'btn-success' : ''}" data-scenario="forbidden403" nonce="${nonce}">403 Forbidden</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'notFound404' ? 'btn-success' : ''}" data-scenario="notFound404" nonce="${nonce}">404 Not Found</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'rateLimit429' ? 'btn-success' : ''}" data-scenario="rateLimit429" nonce="${nonce}">429 Rate Limit</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'server500' ? 'btn-success' : ''}" data-scenario="server500" nonce="${nonce}">500 Error</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'empty204' ? 'btn-success' : ''}" data-scenario="empty204" nonce="${nonce}">204 No Content</button>
+                <div role="group" aria-label="Test Scenarios" style="display: flex; gap: 6px; flex-wrap: wrap;">
+                  <button type="button" class="btn-compact scenario-btn \${(!route.scenario || route.scenario === 'ok200') ? 'btn-success' : ''}" aria-pressed="\${(!route.scenario || route.scenario === 'ok200') ? 'true' : 'false'}" data-scenario="ok200" nonce="${nonce}" title="Populated Success State">200 Populated</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'loading200' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'loading200' ? 'true' : 'false'}" data-scenario="loading200" nonce="${nonce}" title="Simulated 2000ms Latency for Testing Loaders">Loading (2s Delay)</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'empty200' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'empty200' ? 'true' : 'false'}" data-scenario="empty200" nonce="${nonce}" title="Empty Collection Zero-State">Empty State (0 items)</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'bad400' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'bad400' ? 'true' : 'false'}" data-scenario="bad400" nonce="${nonce}">400 Bad Request</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'unauth401' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'unauth401' ? 'true' : 'false'}" data-scenario="unauth401" nonce="${nonce}">401 Unauthorized</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'forbidden403' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'forbidden403' ? 'true' : 'false'}" data-scenario="forbidden403" nonce="${nonce}">403 Forbidden</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'notFound404' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'notFound404' ? 'true' : 'false'}" data-scenario="notFound404" nonce="${nonce}">404 Not Found</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'rateLimit429' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'rateLimit429' ? 'true' : 'false'}" data-scenario="rateLimit429" nonce="${nonce}">429 Rate Limit</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'server500' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'server500' ? 'true' : 'false'}" data-scenario="server500" nonce="${nonce}">500 Error</button>
+                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'empty204' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'empty204' ? 'true' : 'false'}" data-scenario="empty204" nonce="${nonce}">204 No Content</button>
                 </div>
-                <div id="scenarioHelpNote" class="scenario-help-note" style="margin-top: 6px;">\${getScenarioDescription(route.scenario || 'ok200')}</div>
-              </div>
-            \` : ''}
-
-            \${(bodyStr.includes('data:image/svg+xml') || bodyStr.includes('poster') || bodyStr.includes('avatar') || bodyStr.includes('image') || bodyStr.includes('backdrop') || bodyStr.includes('banner')) ? \`
-              <div class="form-group">
-                <label>Offline Media Asset Preview (Zero Network Egress)</label>
-                <div style="display: flex; gap: 12px; align-items: center; background: var(--bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;">
-                  <img id="mediaPreviewImg" src="\${getPreviewVectorSvg(bodyStr)}" style="max-height: 80px; max-width: 120px; border-radius: 4px; border: 1px solid var(--border); background: #0f172a;" alt="Media Preview" />
-                  <div style="font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 3px;">
-                    <strong style="color: #fff;">Offline Vector Placeholder</strong>
-                    <span>Embedded SVG vector assets generated locally without external telemetry or remote CDN dependencies. Never 404s.</span>
-                  </div>
-                </div>
+                <div id="scenarioHelpNote" class="scenario-help-note">\${getScenarioDescription(route.scenario || 'ok200')}</div>
               </div>
             \` : ''}
 
             \${(route.urlPattern.includes('auth') || route.urlPattern.includes('2fa') || route.urlPattern.includes('login') || bodyStr.includes('mfaRequired') || bodyStr.includes('twoFactor')) ? \`
-              <div class="info-callout" style="border-left-color: #3fb950; background: rgba(63, 185, 80, 0.08);">
+              <div class="info-callout" style="border-left-color: var(--success);">
                 <strong>Interactive 2FA / Authentication Sandbox:</strong> This endpoint supports stateful two-factor verification. Send a POST with <code>{ "code": "123456" }</code> to verify, or <code>{ "code": "000000" }</code> to test authentication rejection.
               </div>
             \` : ''}
 
             <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);">Response Body</span>
+                  <span style="font-size: 11px; font-weight: 600; color: var(--muted);">Response Body</span>
                   <span id="payloadMetrics" class="metric-pill">0.0 KB • 0 lines</span>
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
-                  <div class="editor-mode-toggle">
+                  <div class="editor-mode-toggle" role="group" aria-label="Editor View Mode">
                     <button type="button" id="viewFormattedBtn" class="active" nonce="${nonce}">Visual</button>
                     <button type="button" id="viewRawBtn" nonce="${nonce}">Raw</button>
                   </div>
@@ -1208,7 +1232,7 @@ export function getWorkbenchClientScript(nonce: string): string {
                 </div>
               </div>
               <div id="formattedBodyContainer" class="json-formatted-view" title="Click to edit raw JSON">\${syntaxHighlightJson(bodyStr)}</div>
-              <textarea id="editBody" class="json-editor" style="display: none;" nonce="${nonce}">\${bodyStr}</textarea>
+              <textarea id="editBody" class="json-editor" style="display: none;" aria-label="Response Body JSON Editor" nonce="${nonce}">\${escapeHtml(bodyStr)}</textarea>
               <div id="jsonErrorBanner" class="error-banner" style="display: none; margin-top: 6px;"></div>
             </div>
           </div>
@@ -1216,11 +1240,27 @@ export function getWorkbenchClientScript(nonce: string): string {
 
         updatePayloadMetrics(bodyStr);
 
+        const toggleRouteStatusBtn = document.getElementById('toggleRouteStatusBtn');
+        if (toggleRouteStatusBtn) {
+          toggleRouteStatusBtn.addEventListener('click', () => {
+            if (selectedId === 'NEW_ROUTE') {
+              route.enabled = !(route.enabled !== false);
+              const nextEnabled = route.enabled !== false;
+              toggleRouteStatusBtn.setAttribute('aria-pressed', nextEnabled ? 'true' : 'false');
+              const dot = document.getElementById('routeStateDot');
+              const txt = document.getElementById('routeStateText');
+              if (dot) dot.className = 'status-dot ' + (nextEnabled ? 'online' : 'offline');
+              if (txt) txt.textContent = nextEnabled ? 'Active Mock' : 'Disabled';
+            } else {
+              vscode.postMessage({ type: 'toggleRoute', routeId: route.id });
+            }
+          });
+        }
+
         const viewFormattedBtn = document.getElementById('viewFormattedBtn');
         const viewRawBtn = document.getElementById('viewRawBtn');
         const formattedContainer = document.getElementById('formattedBodyContainer');
         const editBody = document.getElementById('editBody');
-        const mediaPreviewImg = document.getElementById('mediaPreviewImg');
 
         if (viewFormattedBtn && viewRawBtn && formattedContainer && editBody) {
           viewFormattedBtn.addEventListener('click', () => {
@@ -1253,9 +1293,6 @@ export function getWorkbenchClientScript(nonce: string): string {
               if (errorBanner) errorBanner.style.display = 'none';
               if (saveBtn) saveBtn.disabled = false;
               formattedContainer.innerHTML = syntaxHighlightJson(editBody.value);
-              if (mediaPreviewImg) {
-                mediaPreviewImg.src = getPreviewVectorSvg(editBody.value);
-              }
             } catch (err) {
               editBody.style.borderColor = 'var(--danger)';
               if (saveBtn) saveBtn.disabled = true;
@@ -1280,8 +1317,12 @@ export function getWorkbenchClientScript(nonce: string): string {
             if (route.variants && route.variants[sc]) {
               const v = route.variants[sc];
               route.scenario = sc;
-              document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('btn-success'));
+              document.querySelectorAll('.scenario-btn').forEach(b => {
+                b.classList.remove('btn-success');
+                b.setAttribute('aria-pressed', 'false');
+              });
               btn.classList.add('btn-success');
+              btn.setAttribute('aria-pressed', 'true');
               const statusEl = document.getElementById('editStatusCode');
               if (statusEl) statusEl.value = String(v.statusCode);
               if (editBody) {
@@ -1295,7 +1336,6 @@ export function getWorkbenchClientScript(nonce: string): string {
               if (formattedContainer) formattedContainer.innerHTML = syntaxHighlightJson(v.rawBody);
               const noteEl = document.getElementById('scenarioHelpNote');
               if (noteEl) noteEl.textContent = getScenarioDescription(sc);
-              if (mediaPreviewImg) mediaPreviewImg.src = getPreviewVectorSvg(v.rawBody);
               updatePayloadMetrics(v.rawBody);
 
               const delayInput = document.getElementById('editDelayMs');
@@ -1335,7 +1375,8 @@ export function getWorkbenchClientScript(nonce: string): string {
           });
         }
 
-        document.getElementById('saveRouteBtn').addEventListener('click', () => {
+        const saveBtnEl = document.getElementById('saveRouteBtn');
+        saveBtnEl.addEventListener('click', () => {
           const method = document.getElementById('editMethod').value;
           const urlPattern = document.getElementById('editUrlPattern').value.trim();
           const statusCode = parseInt(document.getElementById('editStatusCode').value, 10);
@@ -1354,6 +1395,20 @@ export function getWorkbenchClientScript(nonce: string): string {
             return;
           }
 
+          let updatedVariants = route.variants;
+          const activeScenario = route.scenario || 'ok200';
+          if (updatedVariants && updatedVariants[activeScenario]) {
+            updatedVariants = {
+              ...updatedVariants,
+              [activeScenario]: {
+                ...updatedVariants[activeScenario],
+                statusCode,
+                body: parsedBody,
+                rawBody: JSON.stringify(parsedBody, null, 2),
+              },
+            };
+          }
+
           const savedRoute = {
             id: route.id,
             method,
@@ -1361,15 +1416,26 @@ export function getWorkbenchClientScript(nonce: string): string {
             statusCode,
             delayMs,
             body: parsedBody,
-            headers: { 'Content-Type': 'application/json' },
-            enabled: true,
+            headers: route.headers || { 'Content-Type': 'application/json' },
+            enabled: route.enabled !== false,
             createdAt: route.createdAt || Date.now(),
-            source: 'manual'
+            source: route.source || 'manual',
+            scenario: route.scenario,
+            variants: updatedVariants,
           };
 
           vscode.postMessage({ type: 'saveRoute', route: savedRoute });
           selectedId = savedRoute.id;
-          render();
+
+          saveBtnEl.innerHTML = ICONS.check + ' <span>Saved</span>';
+          saveBtnEl.classList.add('btn-success');
+          setTimeout(() => {
+            const currentSaveBtn = document.getElementById('saveRouteBtn');
+            if (currentSaveBtn) {
+              currentSaveBtn.innerHTML = ICONS.save + ' <span>Save Route</span>';
+              currentSaveBtn.classList.remove('btn-success');
+            }
+          }, 1500);
         });
 
         if (selectedId !== 'NEW_ROUTE') {

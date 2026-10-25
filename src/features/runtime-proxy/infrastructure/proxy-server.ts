@@ -203,6 +203,7 @@ export class RuntimeProxy implements ProxyController {
     res.setHeader('Access-Control-Expose-Headers', '*');
 
     if (method === 'OPTIONS') {
+      res.setHeader('Content-Length', '0');
       res.writeHead(204);
       res.end();
       return;
@@ -458,6 +459,7 @@ export class RuntimeProxy implements ProxyController {
       for (const [key, value] of Object.entries(responseHeaders)) {
         res.setHeader(key, value);
       }
+      res.setHeader('Content-Length', Buffer.byteLength(responseBody, 'utf-8'));
       res.writeHead(statusCode);
       res.end(responseBody);
     });

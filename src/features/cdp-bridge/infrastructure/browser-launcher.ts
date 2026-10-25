@@ -90,13 +90,9 @@ export function isPortListening(port: number, timeoutMs = 350): Promise<boolean>
         timeout: timeoutMs,
       },
       (res) => {
-        if (res.statusCode === 200) {
-          res.resume(); // drain stream to prevent memory leak
-          resolve(true);
-        } else {
-          res.resume();
-          resolve(false);
-        }
+        const isOk = res.statusCode === 200;
+        res.destroy();
+        resolve(isOk);
       }
     );
 
