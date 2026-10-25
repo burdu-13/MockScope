@@ -1,6 +1,20 @@
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
 
-export type ApiClientType = 'fetch' | 'axios' | 'useQuery' | 'angular-http';
+export type ApiClientType =
+  | 'fetch'
+  | 'axios'
+  | 'useQuery'
+  | 'angular-http'
+  | 'ky'
+  | 'superagent'
+  | 'got'
+  | 'ofetch'
+  | 'swr'
+  | 'rtk-query'
+  | 'three-loader'
+  | 'xhr'
+  | 'openapi'
+  | 'custom';
 
 export interface SourcePosition {
   line: number;
@@ -12,12 +26,16 @@ export interface SourceRange {
   end: SourcePosition;
 }
 
+export type NetworkRoutingPolicy = 'isolated' | 'passthrough';
+
 export interface DetectedApiCall {
   id: string;
   method: HttpMethod;
   url: string;
   clientType: ApiClientType;
   typeArgument?: string | undefined;
+  inferredShape?: string | undefined;
+  responseConstraints?: Record<string, Array<string | number | boolean>> | undefined;
   range: SourceRange;
   rawExpression: string;
   fileName?: string | undefined;
@@ -43,6 +61,8 @@ export interface MockRoute {
   enabled: boolean;
   createdAt: number;
   source: 'manual' | 'synthesizer' | 'recorded';
+  scenario?: string | undefined;
+  variants?: Record<string, GeneratedMock> | undefined;
 }
 
 export interface TrafficEntry {

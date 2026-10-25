@@ -4,7 +4,30 @@ export class RouteTable {
   private routes: Map<string, MockRoute> = new Map();
 
   public set(route: MockRoute): void {
+    for (const [id, existing] of this.routes.entries()) {
+      if (
+        id !== route.id &&
+        existing.method.toUpperCase() === route.method.toUpperCase() &&
+        existing.urlPattern === route.urlPattern
+      ) {
+        this.routes.delete(id);
+      }
+    }
     this.routes.set(route.id, route);
+  }
+
+  public findExact(method: string, urlPattern: string): MockRoute | undefined {
+    const upperMethod = method.toUpperCase();
+    for (const route of this.routes.values()) {
+      const routeMethod = (route.method || 'GET').toUpperCase();
+      if (
+        (routeMethod === '*' || routeMethod === upperMethod) &&
+        route.urlPattern === urlPattern
+      ) {
+        return route;
+      }
+    }
+    return undefined;
   }
 
   public delete(id: string): boolean {
@@ -30,12 +53,22 @@ export class RouteTable {
       if (!route.enabled) {
         continue;
       }
-
-      if (route.method !== '*' && route.method !== upperMethod) {
+      if (route.method !== '*' && route.method.toUpperCase() !== upperMethod) {
         continue;
       }
+      if (this.matchesPattern(pathname, route.urlPattern, false)) {
+        return route;
+      }
+    }
 
-      if (this.matchesPattern(pathname, route.urlPattern)) {
+    for (const route of this.routes.values()) {
+      if (!route.enabled) {
+        continue;
+      }
+      if (route.method !== '*' && route.method.toUpperCase() !== upperMethod) {
+        continue;
+      }
+      if (this.matchesPattern(pathname, route.urlPattern, true)) {
         return route;
       }
     }
@@ -43,7 +76,11 @@ export class RouteTable {
     return undefined;
   }
 
-  private matchesPattern(rawUrlOrPath: string, pattern: string): boolean {
+  private matchesPattern(
+    rawUrlOrPath: string,
+    pattern: string,
+    allowSuffix: boolean = false
+  ): boolean {
     let cleanPath = rawUrlOrPath.split('?')[0]!.replace(/\/+$/, '') || '/';
     let querySubPath: string | undefined;
 
@@ -75,11 +112,19 @@ export class RouteTable {
     } catch {
     }
 
+    if (!cleanPattern.startsWith('/')) {
+      cleanPattern = '/' + cleanPattern;
+    }
+    if (!cleanPath.startsWith('/')) {
+      cleanPath = '/' + cleanPath;
+    }
+
     if (cleanPattern === cleanPath || (querySubPath && cleanPattern === querySubPath)) {
       return true;
     }
 
-    const regexPattern = cleanPattern
+    const normalizedPattern = cleanPattern.replace(/\{([a-zA-Z0-9_]+)\}/g, ':$1');
+    const regexPattern = normalizedPattern
       .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex chars except *
       .replace(/:[a-zA-Z0-9_]+/g, '[^/]+')   // Named parameters :id -> [^/]+
       .replace(/\*/g, '.*');                 // Wildcard * -> .*
@@ -91,6 +136,18 @@ export class RouteTable {
     if (querySubPath && regex.test(querySubPath)) {
       return true;
     }
+
+    if (allowSuffix && cleanPattern !== '/' && cleanPattern.length > 1) {
+      const stripped = regexPattern.replace(/^\\?\//, '');
+      const suffixRegex = new RegExp(`(?:^|\\/)${stripped}$`, 'i');
+      if (suffixRegex.test(cleanPath)) {
+        return true;
+      }
+      if (querySubPath && suffixRegex.test(querySubPath)) {
+        return true;
+      }
+    }
+
     return false;
   }
 }
