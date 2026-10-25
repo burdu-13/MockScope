@@ -1052,7 +1052,8 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('mockscope.openWorkbench', openWorkbench)
+    vscode.commands.registerCommand('mockscope.openWorkbench', openWorkbench),
+    
   );
 
   context.subscriptions.push(

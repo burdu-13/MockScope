@@ -58,3 +58,9 @@ npm run test:coverage
 # Build production bundle with esbuild (<350 KB target)
 npm run build
 ```
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

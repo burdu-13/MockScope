@@ -4,6 +4,16 @@
   "description": "Ultra-fast, zero-trust API mocking and traffic interception directly from your editor.",
   "version": "0.1.0",
   "publisher": "mockscope",
+  "author": "burdu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/burdu-13/MockScope.git"
+  },
+  "bugs": {
+    "url": "https://github.com/burdu-13/MockScope/issues"
+  },
+  "homepage": "https://github.com/burdu-13/MockScope#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -21,11 +31,18 @@
     "msw",
     "codelens"
   ],
+  "icon": "media/mockscope-logo.png",
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
     "onLanguage:javascript",
-    "onLanguage:javascriptreact"
+    "onLanguage:javascriptreact",
+    "onView:mockscope.dashboardView",
+    "onCommand:mockscope.openWorkbench",
+    "onCommand:mockscope.openDashboard",
+    "onCommand:mockscope.startProxy",
+    "onCommand:mockscope.attachCdp"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -42,12 +59,28 @@
       },
       {
         "command": "mockscope.attachCdp",
-        "title": "MockScope: Attach Browser CDP Bridge",
+        "title": "MockScope: Attach Browser CDP Bridge (Auto-Launch)",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.attachCdpCustom",
+        "title": "MockScope: Attach CDP with Custom Port...",
         "category": "MockScope"
       },
       {
         "command": "mockscope.detachCdp",
         "title": "MockScope: Detach Browser CDP Bridge",
+        "category": "MockScope"
+      },
+      {
+        "command": "mockscope.connectProject",
+        "title": "MockScope: 1-Click Connect Project Dev Server",
+        "category": "MockScope",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "mockscope.disconnectProject",
+        "title": "MockScope: Disconnect Project Dev Server",
         "category": "MockScope"
       },
       {
@@ -67,26 +100,44 @@
       },
       {
         "command": "mockscope.openWorkbench",
-        "title": "MockScope: Open Workbench (Visual Workbench)",
-        "category": "MockScope"
+        "title": "MockScope: Open Workbench",
+        "category": "MockScope",
+        "icon": "media/mockscope-icon.svg"
       },
       {
         "command": "mockscope.openDashboard",
         "title": "MockScope: Open Traffic & Route Dashboard",
-        "category": "MockScope"
+        "category": "MockScope",
+        "icon": "media/mockscope-icon.svg"
       },
       {
         "command": "mockscope.openInBrowser",
         "title": "MockScope: Preview Mock Endpoint in Browser",
-        "category": "MockScope"
+        "category": "MockScope",
+        "icon": "$(globe)"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "mockscope.openWorkbench",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "mockscope.openWorkbench",
+          "when": "view == mockscope.dashboardView",
+          "group": "navigation"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
           "id": "mockscope-explorer",
           "title": "MockScope",
-          "icon": "$(radio-tower)"
+          "icon": "media/mockscope-icon.svg"
         }
       ]
     },
@@ -120,15 +171,5 @@
   "dependencies": {
     "typescript": "^5.3.3",
     "ws": "^8.16.0"
-  },
-  "author": "burdu",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/burdu-13/MockScope.git"
-  },
-  "bugs": {
-    "url": "https://github.com/burdu-13/MockScope/issues"
-  },
-  "homepage": "https://github.com/burdu-13/MockScope#readme"
+  }
 }
