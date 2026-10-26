@@ -1,5 +1,10 @@
 # MockScope
 
+[![CI](https://github.com/burdu-13/MockScope/actions/workflows/ci.yml/badge.svg)](https://github.com/burdu-13/MockScope/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![VS Code](https://img.shields.io/badge/VS%20Code-v1.85+-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
+[![Security: 100% Offline](https://img.shields.io/badge/Security-100%25%20Offline%20%7C%20Zero%20Egress-success.svg)](SECURITY.md)
+
 > Ultra-fast, zero-trust API mocking and traffic interception directly from your editor.
 
 MockScope is a high-performance VS Code extension designed to detect HTTP/API call sites (`fetch`, `axios`, `useQuery`, Angular `HttpClient`) directly in the editor buffer, synthesize realistic mock payloads based on TypeScript generic return types (`<T>`), provide inline CodeLens presentation, intercept and route traffic locally via an embedded reverse proxy or direct Chrome DevTools Protocol (CDP), and export 1-click test code blocks for Playwright and MSW v2.
