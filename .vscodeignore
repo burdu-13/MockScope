@@ -1,9 +1,12 @@
 .vscode/**
 .agents/**
+.github/**
+node_modules/**
 src/**
 examples/**
 tsconfig.json
 esbuild.config.js
 vitest.config.ts
+CONTRIBUTING.md
 *.vsix
 .gitignore
