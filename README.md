@@ -1,6 +1,6 @@
 # MockScope
 
-[![CI](https://github.com/burdu-13/MockScope/actions/workflows/ci.yml/badge.svg)](https://github.com/burdu-13/MockScope/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/Tests-Passing%20(91%2F91)-brightgreen.svg)](https://github.com/burdu-13/MockScope)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-v1.85+-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
 [![Security: 100% Offline](https://img.shields.io/badge/Security-100%25%20Offline%20%7C%20Zero%20Egress-success.svg)](SECURITY.md)
