@@ -1,71 +1,176 @@
 # MockScope
 
-[![Tests](https://img.shields.io/badge/Tests-Passing%20(91%2F91)-brightgreen.svg)](https://github.com/burdu-13/MockScope)
+[![Tests](https://img.shields.io/badge/Tests-Passing%20%2891%2F91%29-brightgreen.svg)](https://github.com/burdu-13/MockScope)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-v1.85+-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
 [![Security: 100% Offline](https://img.shields.io/badge/Security-100%25%20Offline%20%7C%20Zero%20Egress-success.svg)](SECURITY.md)
 
-> Ultra-fast, zero-trust API mocking and traffic interception directly from your editor.
+MockScope is a high-performance Visual Studio Code extension that bridges frontend development and unready backend APIs. It extracts HTTP call sites directly from TypeScript ASTs, synthesizes realistic mock payloads from generic return types, intercepts application network traffic over local loopback interfaces, and exports production-ready test mocks for Playwright and MSW v2.
 
-MockScope is a high-performance VS Code extension designed to detect HTTP/API call sites (`fetch`, `axios`, `useQuery`, Angular `HttpClient`) directly in the editor buffer, synthesize realistic mock payloads based on TypeScript generic return types (`<T>`), provide inline CodeLens presentation, intercept and route traffic locally via an embedded reverse proxy or direct Chrome DevTools Protocol (CDP), and export 1-click test code blocks for Playwright and MSW v2.
+***
 
----
+## Overview
 
-## 🚀 Key Features
+Modern web applications depend on typed backend contracts, yet frontend developers frequently face unbuilt endpoints, broken staging environments, or complex local setup requirements. 
 
-* **⚡ Ultra-Fast AST Scanning (< 3 ms):** Detects `fetch`, `axios.<verb><T>`, TanStack `useQuery`, and Angular `HttpClient` call sites using a lightweight, non-blocking TypeScript AST parser with 300 ms debouncing.
-* **🧬 TypeScript Type Synthesis:** Resolves generic return types (`<T>`) into realistic mock data variants (200 OK, 400 Bad Request, 500 Server Error, 204 Empty) with recursion protection (depth limit: 3).
-* **🌐 Local Loopback Proxy (`127.0.0.1:45990`):** Embedded reverse proxy serving mock responses, simulating network latency, and providing CORS preflight support.
-* **🔌 Direct Browser CDP Bridge:** Intercepts live browser network traffic at the wire level via Chrome DevTools Protocol (`Fetch.enable`, `Fetch.fulfillRequest`).
-* **📋 1-Click Test Exporter:** Instantly copy ready-to-paste mock specifications for **Playwright** (`page.route()`) and **MSW v2** (`http.get/post()`).
-* **🛡️ Zero-Trust Security Sandbox:** 100% offline and air-gapped. Zero external telemetry, loopback-only binding (`127.0.0.1`), strict Webview CSP nonces, and automatic credential redaction (Authorization, Cookies).
-* **📊 Live Traffic & Route Table Webview:** Fixed-capacity circular ring buffer (100 entries, < 35 MB RAM cap) providing a real-time dashboard of all intercepted requests and active mock rules.
+MockScope eliminates these dependencies by analyzing your source code inside VS Code. Rather than relying on manually assembled JSON fixtures, MockScope automatically discovers HTTP signatures, evaluates their TypeScript interfaces, spins up a local loopback reverse proxy on `127.0.0.1:45990`, and configures your project dev server to route matching requests directly into synthesized scenarios.
 
----
+***
 
-## 🏛️ Architecture
+## Visual Workflow Tour
 
-MockScope is built following **Feature-Sliced Architecture (FSA)** principles:
+### 1. AST Endpoint Discovery and 1-Click Proxy
+
+MockScope scans the active workspace buffer without booting a full TypeScript compiler program on every keystroke. It identifies `fetch`, `axios`, TanStack `useQuery`, and Angular `HttpClient` invocations in under 3 milliseconds.
+
+From the MockScope Workbench, developers can view all detected endpoints and initialize mock routing with a single click.
+
+![MockScope Workbench](./media/mockscope-workbench.png)
+
+*The MockScope Workbench displays discovered API endpoints, active proxy status on `127.0.0.1:45990`, and the optional Hybrid Public API Seeder.*
+
+***
+
+### 2. Type-Driven Synthesis and Scenario Management
+
+MockScope traverses TypeScript generics (`<T>`) up to three levels of recursion depth to generate structurally valid payloads. The Route Inspector allows instant switching between standard response scenarios without restarting dev servers:
+
+* **200 Populated:** Fully seeded data structures conforming to TypeScript models.
+* **Loading (2s Delay):** Simulates network latency to verify UI loading skeletons and spinners.
+* **Empty State (0 items):** Empties collections to test fallback screens.
+* **400 Bad Request / 401 Unauthorized / 403 Forbidden / 500 Error:** Validates frontend error boundaries and toast notifications.
+
+![MockScope Route Scenarios](./media/mockscope-scenarios.png)
+
+*Route Inspector for `/api/v1/analytics/overview` showing scenario presets and synthesized JSON response payload.*
+
+***
+
+### 3. Zero-Backend Browser Interception
+
+Once connected, your frontend web application runs in the browser against the local MockScope proxy. In the example below, an Angular enterprise console (`localhost:4200`) displays live charts, cluster nodes, and status indicators powered entirely by MockScope synthesis.
+
+![Live Browser Interception](./media/mockscope-browser-interception.png)
+
+*Angular web application running on `localhost:4200` connected to MockScope with populated telemetry and metrics.*
+
+***
+
+### 4. Wire-Level DevTools Verification
+
+Stateful mutations are handled directly over the wire. Creating a new record in the frontend triggers a real HTTP POST request that is intercepted, statefully recorded, and fulfilled with a typed 200 OK response visible in Chrome DevTools.
+
+![DevTools Interception](./media/mockscope-devtools-inspection.png)
+
+*Chrome DevTools Network inspection showing intercepted `POST /api/v1/security/api-keys` returning a typed JSON response.*
+
+***
+
+## Core Capabilities
+
+### Ultra-Fast AST Scanning (< 3 ms)
+MockScope evaluates open editor buffers using single-file TypeScript parsing (`ts.createSourceFile`). AST traversals are debounced to 300 ms on typing to guarantee zero typing latency on the main thread.
+
+### Generic Return-Type Synthesis
+By evaluating AST type arguments (for example, `http.get<AnalyticsOverview>('/api/analytics')`), MockScope synthesizes realistic mock data, respecting string patterns, numeric ranges, and nested object hierarchies while preventing circular recursion traps.
+
+### Dual Wire Interception Modes
+* **Local Loopback HTTP Proxy (`127.0.0.1:45990`):** An embedded reverse proxy with built-in CORS preflight negotiation, streaming delay simulation, and automatic framework forwarding file generation (e.g. Angular `proxy.conf.json`, Vite `server.proxy`).
+* **Chrome DevTools Protocol (CDP) Bridge:** Direct wire interception utilizing `Fetch.enable` and `Fetch.fulfillRequest` for zero-configuration browser interception.
+
+### 1-Click Test Exporter
+Export any active scenario into copy-pasteable test specifications:
+* **Playwright:** `await page.route('/api/**', async route => ...)`
+* **MSW v2:** `http.get('/api/**', () => HttpResponse.json(...))`
+
+### Bounded Memory Footprint (< 35 MB)
+Traffic logs are managed via a fixed-size circular ring buffer (FIFO: maximum 100 entries). Memory usage remains strictly bounded, preventing IDE degradation during long coding sessions.
+
+***
+
+## Architecture
+
+MockScope is structured according to Feature-Sliced Architecture (FSA) principles. Feature slices maintain vertical isolation, and engine logic remains completely decoupled from VS Code APIs:
 
 ```
 src/
-├── app/                          # Composition root & extension lifecycle (extension.ts)
-├── features/                     # Vertical domain slices
-│   ├── ast-call-analyzer/        # AST parsing & HTTP call extraction (<3ms)
-│   ├── type-synthesizer/         # Type <T> mock generator with heuristics
-│   ├── runtime-proxy/            # Local loopback HTTP reverse proxy & route table
-│   ├── cdp-bridge/               # Wire-level Chrome DevTools Protocol Fetch interceptor
-│   ├── codelens-provider/        # VS Code inline CodeLens presentation layer
-│   └── test-exporter/            # Playwright page.route & MSW v2 handler generator
-└── shared/                       # Shared domain primitives
-    ├── kernel/                   # Ring buffer, credential sanitizer, event bus, types
-    ├── cdp/                      # Low-level loopback CDP WebSocket client
-    └── ui/                       # Dashboard Webview view provider & strict CSP nonces
+|-- app/                      # Extension lifecycle & composition root (extension.ts)
+|-- features/                 # Vertical domain slices (isolated)
+|   |-- ast-call-analyzer/    # Non-blocking TypeScript AST parsing (<3ms)
+|   |-- type-synthesizer/     # Generic return-type mock generator
+|   |-- runtime-proxy/        # Local loopback HTTP reverse proxy & route table
+|   |-- cdp-bridge/           # Chrome DevTools Protocol Fetch controller
+|   |-- codelens-provider/    # Inline editor CodeLens presentation layer
+|   |-- project-connector/    # Automated dev-server proxy configuration
+|   |-- framework-detector/   # Angular, Vite, Next.js, and Nuxt project detection
+|   `-- test-exporter/        # Playwright and MSW v2 code generator
+`-- shared/                   # Domain-agnostic primitives
+    |-- kernel/               # Circular ring buffer, events, credential sanitizer
+    |-- cdp/                  # Low-level loopback WebSocket client
+    `-- ui/                   # Shared Webview view provider & strict CSP nonces
 ```
 
----
+***
 
-## 🛠️ Development & Testing
+## Command Palette Reference
+
+| Command Identifier | Title | Context |
+| :--- | :--- | :--- |
+| `mockscope.openWorkbench` | MockScope: Open Workbench | Global / Editor Title |
+| `mockscope.openDashboard` | MockScope: Open Traffic & Route Dashboard | Global / Explorer |
+| `mockscope.startProxy` | MockScope: Start Local Mock Proxy | Global |
+| `mockscope.stopProxy` | MockScope: Stop Local Mock Proxy | Proxy Running |
+| `mockscope.connectProject` | MockScope: 1-Click Connect Project Dev Server | Workspace Open |
+| `mockscope.disconnectProject` | MockScope: Disconnect Project Dev Server | Project Connected |
+| `mockscope.attachCdp` | MockScope: Attach Browser CDP Bridge (Auto-Launch) | Global |
+| `mockscope.attachCdpCustom` | MockScope: Attach CDP with Custom Port... | Global |
+| `mockscope.detachCdp` | MockScope: Detach Browser CDP Bridge | CDP Attached |
+| `mockscope.mockCall` | MockScope: Mock API Call | CodeLens / Editor |
+| `mockscope.copyPlaywrightSpec` | MockScope: Copy Playwright Route Spec | Inspector / Context |
+| `mockscope.copyMswHandler` | MockScope: Copy MSW v2 Handler | Inspector / Context |
+| `mockscope.openInBrowser` | MockScope: Preview Mock Endpoint in Browser | Inspector / Context |
+
+***
+
+## Security and Zero-Trust Client Sandbox
+
+MockScope operates strictly within a zero-trust local model:
+
+* **Strict Local Loopback (`127.0.0.1`):** All proxy listeners, WebSocket connections, and CDP bridge interfaces bind strictly to `127.0.0.1`. MockScope never listens on `0.0.0.0` or public network adapters.
+* **Zero Outbound Telemetry / Zero Egress:** The extension makes no external network requests, collects no telemetry, and operates 100% offline in air-gapped environments.
+* **Transient Credential Handling:** Authorization headers, Bearer tokens, and session cookies captured in memory are sanitized by the kernel ring buffer and are never persisted to disk or workspace files.
+* **Strict Webview Content Security Policy:** Webviews enforce cryptographic per-session nonces (`'nonce-${nonce}'`), preventing script injection and disallowing inline styles or external CDN resources.
+* **No Dynamic Shell Execution:** Banned functions include `child_process.exec`, `child_process.execSync`, `eval()`, and `new Function()`.
+
+***
+
+## Development and Verification
+
+### Prerequisites
+* Node.js v20.x or higher
+* npm v10.x or higher
+
+### Build and Test Commands
 
 ```bash
 # Install dependencies
 npm install
 
-# Run type checking
+# Verify TypeScript compilation and type contracts
 npm run typecheck
 
-# Run unit and integration tests
+# Run Vitest test suite (91 unit and integration tests)
 npm test
 
-# Run tests with coverage (>85% enforced)
+# Run test coverage audit (>85% enforced)
 npm run test:coverage
 
-# Build production bundle with esbuild (<350 KB target)
+# Build minified production bundle (<350 KB target)
 npm run build
 ```
 
----
+***
 
-## 📄 License
+## License
 
 This project is licensed under the [MIT License](LICENSE).
