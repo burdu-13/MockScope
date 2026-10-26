@@ -9,4 +9,5 @@ esbuild.config.js
 vitest.config.ts
 CONTRIBUTING.md
 *.vsix
+docs/**
 .gitignore

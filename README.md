@@ -17,6 +17,14 @@ MockScope eliminates these dependencies by analyzing your source code inside VS 
 
 ***
 
+## Quick Start (30 Seconds)
+
+1. **Scan Call Sites:** Open any TypeScript or JavaScript file containing network calls (`fetch`, `axios`, TanStack Query, or Angular `HttpClient`). Inline CodeLens action triggers appear above each detected signature automatically.
+2. **Launch Workbench:** Press `Ctrl+Alt+M` (macOS: `Cmd+Alt+M`) or click the `MockScope` status bar item to open the visual route table, traffic inspector, and scenario manager.
+3. **Connect Frontend Dev Server:** Click `Connect` in the Workbench header to route application requests to `127.0.0.1:45990` via your dev server (Vite, Next.js, Angular, Nuxt), or click `Attach CDP` for zero-configuration browser interception.
+
+***
+
 ## Visual Workflow Tour
 
 ### 1. AST Endpoint Discovery and 1-Click Proxy
@@ -129,6 +137,42 @@ src/
 | `mockscope.copyPlaywrightSpec` | MockScope: Copy Playwright Route Spec | Inspector / Context |
 | `mockscope.copyMswHandler` | MockScope: Copy MSW v2 Handler | Inspector / Context |
 | `mockscope.openInBrowser` | MockScope: Preview Mock Endpoint in Browser | Inspector / Context |
+
+***
+
+## Keyboard Shortcuts
+
+| Shortcut | Command Identifier | Description |
+| :--- | :--- | :--- |
+| `Ctrl+Alt+M` (macOS: `Cmd+Alt+M`) | `mockscope.openWorkbench` | Open or focus the MockScope Workbench |
+
+***
+
+## Configuration Settings
+
+MockScope contributes configurable settings under the `mockscope` namespace:
+
+| Setting Key | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `mockscope.proxyPort` | `integer` | `45990` | Loopback port for the embedded local HTTP mock proxy (binds to 127.0.0.1 only). |
+| `mockscope.cdpPort` | `integer` | `9222` | Port used for Chrome DevTools Protocol (CDP) wire interception (binds to 127.0.0.1 only). |
+| `mockscope.enableCodeLens` | `boolean` | `true` | Show inline MockScope action CodeLenses directly above detected API calls in code editors. |
+
+***
+
+## Frequently Asked Questions
+
+### Does MockScope modify my production source code?
+No. AST call analysis operates strictly in-memory on open editor buffers. When using 1-Click Connect, MockScope configures local dev-server proxy configuration files (such as `proxy.conf.json` or `vite.config.ts` proxy entries) with clear demarcation comments. Source application logic remains completely untouched.
+
+### Does any telemetry or data leave my machine?
+No. MockScope enforces a strict zero-trust client sandbox. All proxy listeners and CDP WebSocket connections bind strictly to `127.0.0.1`. The extension contains zero outbound telemetry calls and is 100% offline and air-gap compatible.
+
+### Do I need an OpenAPI or Swagger specification to get started?
+No. MockScope synthesizes mock structures directly from TypeScript return type generics (such as `<T>` in `http.get<UserProfile>('/api/profile')`). If OpenAPI or Swagger specifications exist in your workspace, MockScope automatically detects them and extracts additional endpoint definitions.
+
+### How does MockScope compare to MSW or Playwright mocking?
+MockScope provides interactive, visual, zero-boilerplate mocking during feature development without writing mock handlers or installing npm packages. Once your feature is complete, MockScope exports production-grade MSW v2 handlers and Playwright route specifications with a single click.
 
 ***
 

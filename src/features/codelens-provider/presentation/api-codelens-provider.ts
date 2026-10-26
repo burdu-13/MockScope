@@ -13,6 +13,11 @@ export class ApiCodeLensProvider implements vscode.CodeLensProvider {
     document: vscode.TextDocument,
     _token: vscode.CancellationToken
   ): vscode.CodeLens[] | Thenable<vscode.CodeLens[]> {
+    const isEnabled = vscode.workspace.getConfiguration('mockscope').get<boolean>('enableCodeLens', true);
+    if (!isEnabled) {
+      return [];
+    }
+
     const uriKey = document.uri.toString();
 
     const calls = detectApiCalls(document.getText(), document.fileName);

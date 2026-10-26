@@ -18,18 +18,47 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Programming Languages",
     "Testing",
-    "Other"
+    "Programming Languages"
   ],
   "keywords": [
     "mock",
-    "api",
+    "mocking",
+    "api-mock",
+    "fake-api",
+    "stubbing",
     "proxy",
+    "reverse-proxy",
     "cdp",
+    "devtools",
     "playwright",
     "msw",
-    "codelens"
+    "typescript",
+    "react",
+    "angular",
+    "vite",
+    "nextjs",
+    "codelens",
+    "traffic-inspector",
+    "network",
+    "offline"
+  ],
+  "galleryBanner": {
+    "color": "#0d1117",
+    "theme": "dark"
+  },
+  "qna": "marketplace",
+  "badges": [
+    {
+      "url": "https://img.shields.io/badge/Security-100%25%20Offline-success.svg",
+      "href": "https://github.com/burdu-13/MockScope/blob/main/SECURITY.md",
+      "description": "Zero Egress Local Sandbox"
+    },
+    {
+      "url": "https://img.shields.io/badge/License-MIT-blue.svg",
+      "href": "https://github.com/burdu-13/MockScope/blob/main/LICENSE",
+      "description": "MIT License"
+    }
   ],
   "icon": "media/mockscope-logo.png",
   "activationEvents": [
@@ -149,6 +178,37 @@
           "name": "Live Traffic & Route Table"
         }
       ]
+    },
+    "keybindings": [
+      {
+        "command": "mockscope.openWorkbench",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m"
+      }
+    ],
+    "configuration": {
+      "title": "MockScope",
+      "properties": {
+        "mockscope.proxyPort": {
+          "type": "integer",
+          "default": 45990,
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Port for the local loopback mock proxy (binds strictly to 127.0.0.1)."
+        },
+        "mockscope.cdpPort": {
+          "type": "integer",
+          "default": 9222,
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Port used for Chrome DevTools Protocol (CDP) wire interception (binds strictly to 127.0.0.1)."
+        },
+        "mockscope.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline MockScope action CodeLenses directly above detected API calls in code editors."
+        }
+      }
     }
   },
   "scripts": {

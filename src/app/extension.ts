@@ -63,6 +63,22 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('mockscope.enableCodeLens')) {
+        codeLensProvider.triggerDebouncedRefresh();
+      }
+    })
+  );
+
+  const getConfiguredProxyPort = (): number => {
+    return vscode.workspace.getConfiguration('mockscope').get<number>('proxyPort', DEFAULT_PROXY_PORT);
+  };
+
+  const getConfiguredCdpPort = (): number => {
+    return vscode.workspace.getConfiguration('mockscope').get<number>('cdpPort', 9222);
+  };
+
   const getRoutes = (): MockRoute[] => {
     return runtimeProxy?.getRoutes() || cdpBridge?.getRoutes() || [];
   };
@@ -73,12 +89,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const getProxyState = () => ({
     running: runtimeProxy?.isRunning ?? false,
-    port: runtimeProxy?.port ?? DEFAULT_PROXY_PORT,
+    port: runtimeProxy?.port ?? getConfiguredProxyPort(),
   });
 
   const getCdpState = () => ({
     attached: cdpBridge?.isAttached ?? false,
-    port: cdpBridge?.debugPort ?? 9222,
+    port: cdpBridge?.debugPort ?? getConfiguredCdpPort(),
   });
 
   let cachedDiscoveredCalls: DetectedApiCall[] = [];
@@ -302,7 +318,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const ensureProxyInstance = (): RuntimeProxy => {
     if (!runtimeProxy) {
-      runtimeProxy = new RuntimeProxy(DEFAULT_PROXY_PORT);
+      runtimeProxy = new RuntimeProxy(getConfiguredProxyPort());
       restoreRoutesFromDisk(runtimeProxy);
       runtimeProxy.setJitRouteResolver((method, url) => {
         const cleanUrl = url.split('?')[0] || '/';
@@ -477,7 +493,7 @@ export function activate(context: vscode.ExtensionContext): void {
     try {
       if (!runtimeProxy || !runtimeProxy.isRunning) {
         if (!runtimeProxy) {
-          runtimeProxy = new RuntimeProxy(DEFAULT_PROXY_PORT);
+          runtimeProxy = new RuntimeProxy(getConfiguredProxyPort());
         }
         await runtimeProxy.start();
         updateStatusBar();
@@ -611,7 +627,7 @@ export function activate(context: vscode.ExtensionContext): void {
         },
         onSaveRoute: async (route: MockRoute) => {
           if (!runtimeProxy) {
-            runtimeProxy = new RuntimeProxy(DEFAULT_PROXY_PORT);
+            runtimeProxy = new RuntimeProxy(getConfiguredProxyPort());
           }
           if (!runtimeProxy.isRunning) {
             await runtimeProxy.start();
@@ -878,7 +894,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       'mockscope.attachCdp',
       async (options?: { port?: number; targetUrl?: string; promptPort?: boolean }) => {
-        let port = options?.port ?? 9222;
+        let port = options?.port ?? getConfiguredCdpPort();
 
         if (options?.promptPort) {
           const portInput = await vscode.window.showInputBox({

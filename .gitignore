@@ -6,6 +6,7 @@ dist/
 *.vsix
 .vscode-test/
 .mockscope/
+docs/
 
 # Internal agent directives
 .agents/
