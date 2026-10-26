@@ -2,7 +2,7 @@
   "name": "mockscope",
   "displayName": "MockScope",
   "description": "Ultra-fast, zero-trust API mocking and traffic interception directly from your editor.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "mockscope",
   "author": "burdu",
   "license": "MIT",
