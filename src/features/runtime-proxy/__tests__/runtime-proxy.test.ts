@@ -450,5 +450,124 @@ describe('RuntimeProxy Integration', () => {
     expect(remainingList).toHaveLength(1);
     expect(remainingList[0].id).toBe('id_1002');
   });
+
+  it('should rank exact and parameterized routes above wildcards and support query matching', () => {
+    const table = new RouteTable();
+    table.set({
+      id: 'wildcard_api',
+      method: 'GET',
+      urlPattern: '/api/*',
+      statusCode: 200,
+      body: { kind: 'wildcard' },
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'manual',
+    });
+    table.set({
+      id: 'param_user',
+      method: 'GET',
+      urlPattern: '/api/users/:id',
+      statusCode: 200,
+      body: { kind: 'param' },
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'manual',
+    });
+    table.set({
+      id: 'exact_me',
+      method: 'GET',
+      urlPattern: '/api/users/me',
+      statusCode: 200,
+      body: { kind: 'exact' },
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'manual',
+    });
+    table.set({
+      id: 'query_featured',
+      method: 'GET',
+      urlPattern: '/api/items?type=featured',
+      statusCode: 200,
+      body: { kind: 'featured' },
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'manual',
+    });
+
+    expect(table.match('GET', '/api/users/me')?.id).toBe('exact_me');
+    expect(table.match('GET', '/api/users/42')?.id).toBe('param_user');
+    expect(table.match('GET', '/api/other/thing')?.id).toBe('wildcard_api');
+    expect(table.match('GET', '/api/items?type=featured')?.id).toBe('query_featured');
+  });
+
+  it('should isolate multi-segment /api/v1/* CRUD mutations so unrelated collections are untouched', async () => {
+    proxy = new RuntimeProxy(0);
+    await proxy.start();
+
+    proxy.addRoute({
+      id: 'users_list',
+      method: 'GET',
+      urlPattern: '/api/v1/users',
+      statusCode: 200,
+      body: [{ id: 'id_1001', name: 'Alice' }],
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'synthesizer',
+    });
+
+    proxy.addRoute({
+      id: 'orders_list',
+      method: 'GET',
+      urlPattern: '/api/v1/orders',
+      statusCode: 200,
+      body: [{ id: 'id_1001', status: 'pending' }],
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'synthesizer',
+    });
+
+    proxy.addRoute({
+      id: 'orders_delete',
+      method: 'DELETE',
+      urlPattern: '/api/v1/orders/:id',
+      statusCode: 200,
+      body: { deleted: true },
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'synthesizer',
+    });
+
+    await makeRequest(proxy.port, '/api/v1/orders/id_1001', 'DELETE');
+
+    const ordersAfter = JSON.parse((await makeRequest(proxy.port, '/api/v1/orders')).body);
+    const usersAfter = JSON.parse((await makeRequest(proxy.port, '/api/v1/users')).body);
+    expect(ordersAfter).toHaveLength(0);
+    expect(usersAfter).toHaveLength(1);
+    expect(usersAfter[0].name).toBe('Alice');
+  });
+
+  it('should forward unmatched requests in passthrough mode to local loopback upstream', async () => {
+    const upstream = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ upstream: true, path: req.url }));
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', () => resolve()));
+    const upstreamAddr = upstream.address();
+    const upstreamPort = typeof upstreamAddr === 'object' && upstreamAddr ? upstreamAddr.port : 0;
+
+    try {
+      proxy = new RuntimeProxy(0);
+      proxy.setRoutingPolicy('passthrough', `http://127.0.0.1:${upstreamPort}`);
+      await proxy.start();
+
+      const res = await makeRequest(proxy.port, '/api/live-check?q=1');
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ upstream: true, path: '/api/live-check?q=1' });
+      const traffic = proxy.getTraffic();
+      expect(traffic[traffic.length - 1]?.isMocked).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
 });
 

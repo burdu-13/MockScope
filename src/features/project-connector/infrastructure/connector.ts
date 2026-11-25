@@ -289,8 +289,12 @@ export function autoConnectProject(
     },
   }, ${MOCK_MARKER}`;
 
+      const serverRegex = /server\s*:\s*\{/;
       let modified = original;
-      if (original.includes('defineConfig({')) {
+      if (serverRegex.test(original)) {
+        const proxyInner = `proxy: {\n      ${proxyEntries}\n    }, ${MOCK_MARKER}`;
+        modified = original.replace(serverRegex, (match) => `${match}\n    ${proxyInner}`);
+      } else if (original.includes('defineConfig({')) {
         modified = original.replace('defineConfig({', `defineConfig({\n  ${proxyBlock}`);
       } else if (original.includes('export default {')) {
         modified = original.replace('export default {', `export default {\n  ${proxyBlock}`);
@@ -328,9 +332,12 @@ export function autoConnectProject(
         fs.writeFileSync(backupFile, original, 'utf-8');
       }
 
+      const rewriteEntries = prefixes
+        .map((p) => `{ source: '${p}/:path*', destination: '${proxyTarget}${p}/:path*' }`)
+        .join(',\n      ');
       const rewriteBlock = `async rewrites() {
     return [
-      { source: '/api/:path*', destination: '${proxyTarget}/api/:path*' }
+      ${rewriteEntries}
     ];
   }, ${MOCK_MARKER}`;
 

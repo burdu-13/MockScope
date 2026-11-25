@@ -4,6 +4,8 @@ import {
   generateCspNonce,
   type DetectedApiCall,
   type MockRoute,
+  type TrafficEntry,
+  type ResolvedTypeModel,
 } from '../../kernel/index';
 import { getWorkbenchStyles } from './workbench-styles';
 import { getWorkbenchHtml } from './workbench-templates';
@@ -26,6 +28,8 @@ export interface WorkbenchActions {
   onOpenSourceLocation?: (fileName: string, line: number, character?: number) => Promise<void>;
   onSwitchRouteScenario?: (routeId: string, scenario: string) => void;
   onToggleHybridSeeder?: () => Promise<void>;
+  onReplayTraffic?: (entry: TrafficEntry) => Promise<void>;
+  onInspectTypeModel?: (typeName: string, fileName?: string) => Promise<ResolvedTypeModel>;
 }
 
 export class WorkbenchPanel {
@@ -124,6 +128,21 @@ export class WorkbenchPanel {
           case 'clearTraffic':
             this.actions.onClearTraffic();
             break;
+          case 'replayTraffic':
+            await this.actions.onReplayTraffic?.(message.entry);
+            this.refresh();
+            break;
+          case 'inspectTypeModel': {
+            if (this.actions.onInspectTypeModel && message.typeName) {
+              const model = await this.actions.onInspectTypeModel(message.typeName, message.fileName);
+              this._panel.webview.postMessage({
+                type: 'typeModelDetails',
+                requestKey: message.requestKey,
+                model,
+              });
+            }
+            break;
+          }
           case 'copyText':
             this.actions.onCopyText(message.text, message.label);
             break;

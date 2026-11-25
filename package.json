@@ -2,7 +2,7 @@
   "name": "mockscope",
   "displayName": "MockScope",
   "description": "Ultra-fast, zero-trust API mocking and traffic interception directly from your editor.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "mockscope",
   "author": "burdu",
   "license": "MIT",
@@ -19,7 +19,8 @@
   },
   "categories": [
     "Testing",
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
   "keywords": [
     "mock",
@@ -33,11 +34,19 @@
     "devtools",
     "playwright",
     "msw",
+    "openapi",
+    "swagger",
+    "graphql",
+    "tanstack-query",
+    "swr",
+    "rtk-query",
+    "wretch",
     "typescript",
     "react",
     "angular",
     "vite",
     "nextjs",
+    "nuxt",
     "codelens",
     "traffic-inspector",
     "network",
@@ -62,7 +71,6 @@
   ],
   "icon": "media/mockscope-logo.png",
   "activationEvents": [
-    "onStartupFinished",
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
     "onLanguage:javascript",
@@ -70,6 +78,8 @@
     "onView:mockscope.dashboardView",
     "onCommand:mockscope.openWorkbench",
     "onCommand:mockscope.openDashboard",
+    "onCommand:mockscope.openPlayground",
+    "onCommand:mockscope.showQuickActions",
     "onCommand:mockscope.startProxy",
     "onCommand:mockscope.attachCdp"
   ],
@@ -144,12 +154,36 @@
         "title": "MockScope: Preview Mock Endpoint in Browser",
         "category": "MockScope",
         "icon": "$(globe)"
+      },
+      {
+        "command": "mockscope.openPlayground",
+        "title": "MockScope: Open Interactive Playground",
+        "category": "MockScope",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "mockscope.showQuickActions",
+        "title": "MockScope: Quick Control Hub",
+        "category": "MockScope",
+        "icon": "$(radio-tower)"
+      },
+      {
+        "command": "mockscope.callActions",
+        "title": "MockScope: Inspect or Mock API Call",
+        "category": "MockScope"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "mockscope.callActions",
+          "when": "false"
+        }
+      ],
       "editor/title": [
         {
           "command": "mockscope.openWorkbench",
+          "when": "editorLangId =~ /^(typescript|typescriptreact|javascript|javascriptreact)$/",
           "group": "navigation"
         }
       ],
@@ -207,9 +241,59 @@
           "type": "boolean",
           "default": true,
           "description": "Show inline MockScope action CodeLenses directly above detected API calls in code editors."
+        },
+        "mockscope.codeLensMode": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "expanded"
+          ],
+          "default": "compact",
+          "description": "Display a single state-aware CodeLens per API call (compact) or five separate action lenses (expanded)."
+        },
+        "mockscope.appUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Optional default local dev server URL (e.g. http://localhost:5173) used when auto-launching Chrome/Edge for CDP interception."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "mockscope.gettingStarted",
+        "title": "Get Started with MockScope",
+        "description": "Synthesize typed mocks from source code, intercept loopback traffic, and export Playwright or MSW tests in 60 seconds.",
+        "steps": [
+          {
+            "id": "openPlayground",
+            "title": "Try the Interactive Playground",
+            "description": "Open a sample TypeScript file containing fetch, axios, useQuery, and Angular HttpClient calls to see instant AST discovery, Hover previews, and state-aware CodeLens actions.\n[Open Playground](command:mockscope.openPlayground)",
+            "media": {
+              "image": "media/mockscope-workbench.png",
+              "altText": "MockScope Workbench showing discovered endpoints"
+            }
+          },
+          {
+            "id": "openWorkbench",
+            "title": "Inspect Scenarios in the Workbench",
+            "description": "Press Ctrl+Alt+M (Cmd+Alt+M on macOS) or open the Workbench to switch between 200 Populated, Loading, Empty, 2FA, 401, and 500 error scenarios.\n[Open Workbench](command:mockscope.openWorkbench)",
+            "media": {
+              "image": "media/mockscope-scenarios.png",
+              "altText": "MockScope Route Inspector with scenario presets"
+            }
+          },
+          {
+            "id": "connectAppOrCdp",
+            "title": "Route Frontend Traffic (1-Click Proxy or CDP)",
+            "description": "Connect Vite, Next.js, Angular, or Nuxt to 127.0.0.1:45990 in one click, or attach Chrome CDP with zero config changes.\n[1-Click Connect App](command:mockscope.connectProject)",
+            "media": {
+              "image": "media/mockscope-browser-interception.png",
+              "altText": "Live browser interception powered by MockScope"
+            }
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run build",

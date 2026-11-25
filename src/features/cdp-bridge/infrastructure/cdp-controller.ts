@@ -4,13 +4,13 @@ import {
   CircularRingBuffer,
   sanitizeHeaders,
   assertLoopbackHost,
+  RouteTable,
   type MockRoute,
   type TrafficEntry,
   globalEventBus,
   generateCompanionAuthResponse,
   generateMockJwt,
 } from '../../../shared/kernel/index';
-import { RouteTable } from '../../runtime-proxy/index';
 import type {
   CdpController,
   CdpAttachOptions,
@@ -157,12 +157,25 @@ export class CdpBridgeController implements CdpController {
       if (matchedRoute.delayMs && matchedRoute.delayMs > 0) {
         await new Promise((r) => setTimeout(r, matchedRoute.delayMs));
       }
-      fulfillStatusCode = matchedRoute.statusCode;
-      customHeaders = matchedRoute.headers || {};
-      fulfillBody =
-        typeof matchedRoute.body === 'string'
-          ? matchedRoute.body
-          : JSON.stringify(matchedRoute.body, null, 2);
+      if (
+        matchedRoute.scenario &&
+        matchedRoute.scenario !== 'ok200' &&
+        matchedRoute.scenario !== 'loading200' &&
+        matchedRoute.variants &&
+        matchedRoute.variants[matchedRoute.scenario]
+      ) {
+        const activeVariant = matchedRoute.variants[matchedRoute.scenario]!;
+        fulfillStatusCode = activeVariant.statusCode;
+        customHeaders = activeVariant.headers || {};
+        fulfillBody = activeVariant.rawBody;
+      } else {
+        fulfillStatusCode = matchedRoute.statusCode;
+        customHeaders = matchedRoute.headers || {};
+        fulfillBody =
+          typeof matchedRoute.body === 'string'
+            ? matchedRoute.body
+            : JSON.stringify(matchedRoute.body, null, 2);
+      }
     } else if (is2faEndpoint) {
       let code = '';
       let parsed: Record<string, unknown> = {};

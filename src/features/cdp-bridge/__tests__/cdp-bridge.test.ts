@@ -151,4 +151,76 @@ describe('cdp-bridge and CdpClient', () => {
     await controller.detach();
     expect(controller.isAttached).toBe(false);
   });
+
+  it('should honor active scenario variants in CDP fulfillment', async () => {
+    const port = await createMockCdpServer();
+    const sentMessages: any[] = [];
+
+    wss!.on('connection', (ws: WebSocket) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        sentMessages.push(msg);
+
+        if (msg.method === 'Fetch.enable') {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }));
+          setTimeout(() => {
+            ws.send(
+              JSON.stringify({
+                method: 'Fetch.requestPaused',
+                params: {
+                  requestId: 'req_var_1',
+                  request: { url: 'http://127.0.0.1/api/orders', method: 'GET', headers: {} },
+                  frameId: 'frame_1',
+                  resourceType: 'XHR',
+                },
+              })
+            );
+          }, 10);
+        } else if (msg.method === 'Fetch.fulfillRequest' || msg.method === 'Fetch.disable') {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
+      });
+    });
+
+    const client = new CdpClient(`ws://127.0.0.1:${port}/devtools/page`);
+    const routeTable = new RouteTable();
+    routeTable.set({
+      id: 'orders_1',
+      method: 'GET',
+      urlPattern: '/api/orders',
+      statusCode: 200,
+      body: [{ id: '1' }],
+      enabled: true,
+      createdAt: Date.now(),
+      source: 'synthesizer',
+      scenario: 'server500',
+      variants: {
+        ok200: {
+          statusCode: 200,
+          statusText: 'OK',
+          headers: {},
+          body: [{ id: '1' }],
+          rawBody: JSON.stringify([{ id: '1' }]),
+        },
+        server500: {
+          statusCode: 500,
+          statusText: 'Internal Server Error',
+          headers: {},
+          body: { error: 'Simulated 500' },
+          rawBody: JSON.stringify({ error: 'Simulated 500' }),
+        },
+      },
+    });
+
+    const controller = new CdpBridgeController(port, routeTable, client);
+    await controller.attach();
+    await new Promise((r) => setTimeout(r, 60));
+
+    const fulfillCall = sentMessages.find((m) => m.method === 'Fetch.fulfillRequest');
+    expect(fulfillCall).toBeDefined();
+    expect(fulfillCall.params.responseCode).toBe(500);
+    expect(Buffer.from(fulfillCall.params.body, 'base64').toString('utf-8')).toContain('Simulated 500');
+
+    await controller.detach();
+  });
 });

@@ -451,7 +451,6 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
   }
 
   precollectConstants(sourceFile);
-  precollectConstants(sourceFile);
 
   const localHttpWrappers = new Set<string>();
 
@@ -509,7 +508,6 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
     ts.forEachChild(n, collectWrappers);
   }
 
-  collectWrappers(sourceFile);
   collectWrappers(sourceFile);
 
   const returnTypeStack: string[] = [];
@@ -793,7 +791,7 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
     if (ts.isCallExpression(node)) {
       const expr = node.expression;
 
-      if (ts.isIdentifier(expr) && (expr.text === 'fetch' || expr.text === '$fetch' || expr.text === 'ofetch')) {
+      if (ts.isIdentifier(expr) && (expr.text === 'fetch' || expr.text === '$fetch' || expr.text === 'ofetch' || expr.text === 'useFetch' || expr.text === 'useLazyFetch')) {
         const urlArg = node.arguments[0];
         const optionsArg = node.arguments[1];
         let url = extractUrlValue(urlArg, sourceFile, localConstants);
@@ -854,6 +852,52 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
             typeArg = node.typeArguments[0]!.getText(sourceFile);
           }
           recordCall(node, method, url, clientType, typeArg);
+        }
+      }
+
+      else if (ts.isPropertyAccessExpression(expr) && (expr.name.text === 'query' || expr.name.text === 'mutation') && node.arguments.length === 1 && ts.isObjectLiteralExpression(node.arguments[0]!)) {
+        const argObj = node.arguments[0]!;
+        let rtkUrl: string | undefined;
+        let rtkMethod: HttpMethod = expr.name.text === 'mutation' ? 'POST' : 'GET';
+        for (const prop of argObj.properties) {
+          if (ts.isPropertyAssignment(prop) && prop.name.getText(sourceFile) === 'query') {
+            const init = prop.initializer;
+            let retExpr: ts.Expression | undefined;
+            if (ts.isArrowFunction(init)) {
+              if (ts.isBlock(init.body)) {
+                for (const st of init.body.statements) {
+                  if (ts.isReturnStatement(st) && st.expression) {
+                    retExpr = st.expression;
+                    break;
+                  }
+                }
+              } else {
+                retExpr = init.body;
+              }
+            }
+            if (retExpr && ts.isParenthesizedExpression(retExpr)) {
+              retExpr = retExpr.expression;
+            }
+            if (retExpr && ts.isObjectLiteralExpression(retExpr)) {
+              const cfg = extractConfigObjectEndpoint(retExpr, sourceFile, localConstants);
+              if (cfg) {
+                rtkUrl = cfg.url;
+                if (cfg.method) rtkMethod = cfg.method;
+              }
+            } else if (retExpr) {
+              rtkUrl = extractUrlValue(retExpr, sourceFile, localConstants);
+            }
+          }
+        }
+        if (rtkUrl) {
+          let typeArg: string | undefined;
+          if (node.typeArguments && node.typeArguments.length > 0) {
+            const firstType = node.typeArguments[0]!.getText(sourceFile);
+            if (firstType !== 'void' && firstType !== 'any' && firstType !== 'unknown') {
+              typeArg = firstType;
+            }
+          }
+          recordCall(node, rtkMethod, rtkUrl, 'rtk-query', typeArg);
         }
       }
 
@@ -921,6 +965,20 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
               url = config.url;
             }
           }
+          if (!url && isWretch) {
+            let chain: ts.Expression = expr.expression;
+            while (ts.isCallExpression(chain)) {
+              if (ts.isIdentifier(chain.expression) && chain.expression.text === 'wretch') {
+                url = extractUrlValue(chain.arguments[0], sourceFile, localConstants);
+                break;
+              }
+              if (ts.isPropertyAccessExpression(chain.expression)) {
+                chain = chain.expression.expression;
+              } else {
+                break;
+              }
+            }
+          }
           if (url) {
             let typeArg: string | undefined;
             if (node.typeArguments && node.typeArguments.length > 0) {
@@ -934,6 +992,8 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
               ? 'got'
               : isSuperagent
               ? 'superagent'
+              : isWretch
+              ? 'custom'
               : 'axios';
             recordCall(node, mappedVerb, url, clientType, typeArg);
           }
@@ -958,6 +1018,27 @@ export function detectApiCalls(documentText: string, fileName: string = 'file.ts
           const urlVal = extractUrlValue(node.arguments[1], sourceFile, localConstants);
           if (urlVal && methodVal) {
             recordCall(node, methodVal, urlVal, 'xhr');
+          }
+        }
+      }
+
+      else if (ts.isIdentifier(expr) && expr.text === 'wretch') {
+        const nodeStart = node.getStart(sourceFile);
+        const alreadyCapturedInChain = results.some((r) => {
+          const rPos = sourceFile.getPositionOfLineAndCharacter(r.range.start.line, r.range.start.character);
+          const rEnd = sourceFile.getPositionOfLineAndCharacter(r.range.end.line, r.range.end.character);
+          return nodeStart >= rPos && nodeStart <= rEnd;
+        });
+        if (!alreadyCapturedInChain) {
+          const urlArg = node.arguments[0];
+          const url = extractUrlValue(urlArg, sourceFile, localConstants);
+          if (url) {
+            const method = extractMethodFromOptions(node.arguments[1], sourceFile) || 'GET';
+            let typeArg: string | undefined;
+            if (node.typeArguments && node.typeArguments.length > 0) {
+              typeArg = node.typeArguments[0]!.getText(sourceFile);
+            }
+            recordCall(node, method, url, 'custom', typeArg);
           }
         }
       }

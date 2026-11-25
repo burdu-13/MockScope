@@ -449,4 +449,28 @@ describe('ast-call-analyzer', () => {
     expect(calls[0]!.url).toBe('/api/users');
     expect(calls[0]!.clientType).toBe('axios');
   });
+
+  it('should detect RTK Query, Nuxt useFetch, and wretch calls', () => {
+    const code = `
+      const api = createApi({
+        endpoints: (builder) => ({
+          getUsers: builder.query<User[], void>({
+            query: () => '/api/rtk/users',
+          }),
+          createOrder: builder.mutation<Order, Partial<Order>>({
+            query: (body) => ({ url: '/api/rtk/orders', method: 'POST', body }),
+          }),
+        }),
+      });
+
+      const { data } = useFetch<Profile>('/api/nuxt/profile');
+      const res = await wretch('/api/wretch/items').post({ ok: true }).json();
+    `;
+
+    const calls = detectApiCalls(code);
+    expect(calls.some((c) => c.clientType === 'rtk-query' && c.method === 'GET' && c.url === '/api/rtk/users' && c.typeArgument === 'User[]')).toBe(true);
+    expect(calls.some((c) => c.clientType === 'rtk-query' && c.method === 'POST' && c.url === '/api/rtk/orders' && c.typeArgument === 'Order')).toBe(true);
+    expect(calls.some((c) => c.clientType === 'ofetch' && c.url === '/api/nuxt/profile' && c.typeArgument === 'Profile')).toBe(true);
+    expect(calls.some((c) => c.url === '/api/wretch/items' && c.method === 'POST')).toBe(true);
+  });
 });

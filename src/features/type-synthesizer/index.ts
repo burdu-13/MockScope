@@ -3,6 +3,7 @@ export {
   TypeSynthesizerEngine,
   synthesizePayload,
   generateMockVariants,
+  inspectTypeModel,
   type MockVariantSuite,
 } from './infrastructure/type-resolver';
 export {

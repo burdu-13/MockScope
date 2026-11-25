@@ -79,3 +79,22 @@ export interface TrafficEntry {
   isMocked: boolean;
   matchedRouteId?: string | undefined;
 }
+
+export interface ResolvedRelatedModel {
+  name: string;
+  kind: 'interface' | 'type' | 'enum' | 'class';
+  definitionText: string;
+  filePath?: string | undefined;
+  line?: number | undefined;
+}
+
+export interface ResolvedTypeModel {
+  requestedType: string;
+  baseTypeName: string;
+  found: boolean;
+  kind?: 'interface' | 'type' | 'enum' | 'class' | 'inline' | 'primitive' | undefined;
+  definitionText: string;
+  filePath?: string | undefined;
+  line?: number | undefined;
+  relatedModels?: ResolvedRelatedModel[] | undefined;
+}

@@ -85,31 +85,25 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; connect-src ws://127.0.0.1:* http://127.0.0.1:*;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; connect-src ws://127.0.0.1:* http://127.0.0.1:*;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MockScope</title>
-  <style>
+  <style nonce="${nonce}">
     :root {
-      --bg: var(--vscode-sideBar-background, #141417);
-      --fg: var(--vscode-foreground, #e4e4e7);
+      --bg: var(--vscode-sideBar-background, #252526);
+      --fg: var(--vscode-foreground, #cccccc);
       --muted: var(--vscode-descriptionForeground, #8b8b93);
-      --border: var(--vscode-panel-border, var(--vscode-widget-border, #27272a));
+      --border: var(--vscode-panel-border, var(--vscode-widget-border, #333333));
       --hover-bg: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.08));
-      --focus-border: var(--vscode-focusBorder, #3b82f6);
-      --btn-bg: var(--vscode-button-background, #2563eb);
+      --focus-border: var(--vscode-focusBorder, #007acc);
+      --btn-bg: var(--vscode-button-background, #0e639c);
       --btn-fg: var(--vscode-button-foreground, #ffffff);
-      --btn-hover: var(--vscode-button-hoverBackground, #1d4ed8);
+      --btn-hover: var(--vscode-button-hoverBackground, #1177bb);
       --ui-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
       --code-font: var(--vscode-editor-font-family, Consolas, monospace);
       --success: var(--vscode-testing-iconPassed, #22c55e);
       --warning: var(--vscode-editorWarning-foreground, #eab308);
       --danger: var(--vscode-errorForeground, #ef4444);
-      --offline-dot: #71717a;
-
-      --method-get: #60a5fa;
-      --method-post: #4ade80;
-      --method-put: #facc15;
-      --method-delete: #f87171;
     }
 
     body.vscode-light,
@@ -123,12 +117,6 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       --success: #15803d;
       --warning: #b45309;
       --danger: #dc2626;
-      --offline-dot: #8e8e93;
-
-      --method-get: #005fb8;
-      --method-post: #15803d;
-      --method-put: #b45309;
-      --method-delete: #dc2626;
     }
 
     *,
@@ -159,7 +147,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 6px;
+      gap: 8px;
     }
     .brand-title {
       display: inline-flex;
@@ -210,7 +198,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       flex-shrink: 0;
     }
     .status-dot.online { background-color: var(--success); }
-    .status-dot.offline { background-color: var(--offline-dot); }
+    .is-hidden { display: none !important; }
     .button-group {
       display: flex;
       gap: 6px;
@@ -283,6 +271,10 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     .row-item:hover {
       background: var(--hover-bg);
     }
+    .row-item:focus-visible {
+      outline: 1px solid var(--focus-border);
+      outline-offset: -1px;
+    }
     .row-item.disabled .url-text {
       color: var(--muted);
     }
@@ -291,9 +283,22 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       height: 18px;
       border: 1px solid transparent;
       background: transparent;
+      color: var(--muted);
+      font-family: var(--code-font);
+      font-size: 10px;
     }
     .route-toggle-btn:hover {
       border-color: var(--border);
+      color: var(--fg);
+    }
+    .open-browser-btn {
+      padding: 2px 4px;
+      height: 18px;
+      display: none;
+    }
+    .row-item:hover .open-browser-btn,
+    .row-item:focus-within .open-browser-btn {
+      display: inline-flex;
     }
     .method-badge {
       font-weight: 600;
@@ -301,12 +306,11 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       width: 38px;
       font-family: var(--code-font);
       flex-shrink: 0;
+      color: var(--muted);
     }
-    .method-get { color: var(--method-get); }
-    .method-post { color: var(--method-post); }
-    .method-put { color: var(--method-put); }
-    .method-delete { color: var(--method-delete); }
-    .method-other { color: var(--muted); }
+    .method-badge.is-mutating {
+      color: var(--fg);
+    }
     .url-text {
       font-family: var(--code-font);
       font-size: 11px;
@@ -314,6 +318,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
       flex: 1;
+      min-width: 0;
       color: var(--fg);
     }
     .meta-code {
@@ -323,7 +328,6 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       font-variant-numeric: tabular-nums;
       flex-shrink: 0;
     }
-    .status-2xx { color: var(--success); }
     .status-4xx { color: var(--warning); }
     .status-5xx { color: var(--danger); }
     .empty-state {
@@ -342,18 +346,18 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
   </style>
 </head>
 <body>
-  <header class="header-panel" role="banner">
+  <header class="header-panel" role="toolbar" aria-label="MockScope Sidebar Controls">
     <div class="brand-row">
       <span class="brand-title">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="9.25" stroke="#3B82F6" stroke-width="1.85"/>
-          <line x1="12" y1="1.25" x2="12" y2="3.75" stroke="#3B82F6" stroke-width="1.85"/>
-          <line x1="12" y1="20.25" x2="12" y2="22.75" stroke="#3B82F6" stroke-width="1.85"/>
-          <line x1="1.25" y1="12" x2="3.75" y2="12" stroke="#3B82F6" stroke-width="1.85"/>
-          <line x1="20.25" y1="12" x2="22.75" y2="12" stroke="#3B82F6" stroke-width="1.85"/>
+          <circle cx="12" cy="12" r="9.25" stroke="currentColor" stroke-width="1.85"/>
+          <line x1="12" y1="1.25" x2="12" y2="3.75" stroke="currentColor" stroke-width="1.85"/>
+          <line x1="12" y1="20.25" x2="12" y2="22.75" stroke="currentColor" stroke-width="1.85"/>
+          <line x1="1.25" y1="12" x2="3.75" y2="12" stroke="currentColor" stroke-width="1.85"/>
+          <line x1="20.25" y1="12" x2="22.75" y2="12" stroke="currentColor" stroke-width="1.85"/>
           <path d="M9.75 8.5C8.5 8.5 8.25 9.25 8.25 10.25V11C8.25 11.55 7.65 12 7 12C7.65 12 8.25 12.45 8.25 13V13.75C8.25 14.75 8.5 15.5 9.75 15.5" stroke="currentColor" stroke-width="1.85"/>
           <path d="M14.25 8.5C15.5 8.5 15.75 9.25 15.75 10.25V11C15.75 11.55 16.35 12 17 12C16.35 12 15.75 12.45 15.75 13V13.75C15.75 14.75 15.5 15.5 14.25 15.5" stroke="currentColor" stroke-width="1.85"/>
-          <circle cx="12" cy="12" r="1.5" fill="#38BDF8" stroke="none"/>
+          <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>
         </svg>
         <span>MockScope</span>
       </span>
@@ -362,25 +366,25 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     <div class="status-row">
       <span><strong>Proxy</strong> 127.0.0.1:<span id="proxyPortText">45990</span></span>
       <output class="status-indicator" aria-live="polite">
-        <span id="proxyDot" class="status-dot offline" aria-hidden="true"></span>
+        <span id="proxyDot" class="status-dot is-hidden" aria-hidden="true"></span>
         <span id="proxyText">Off</span>
       </output>
     </div>
     <div class="status-row">
       <span><strong>CDP</strong> 127.0.0.1:<span id="cdpPortText">9222</span></span>
       <output class="status-indicator" aria-live="polite">
-        <span id="cdpDot" class="status-dot offline" aria-hidden="true"></span>
+        <span id="cdpDot" class="status-dot is-hidden" aria-hidden="true"></span>
         <span id="cdpText">Off</span>
       </output>
     </div>
     <nav class="button-group" aria-label="Runtime Controls">
-      <button type="button" id="openWorkbenchBtn" class="primary" nonce="${nonce}" title="Open MockScope Workbench">
+      <button type="button" id="openWorkbenchBtn" class="primary" title="Open MockScope Workbench">
         <span>Workbench</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
       </button>
-      <button type="button" id="toggleProxyBtn" nonce="${nonce}" title="Start or stop local loopback proxy">Start Proxy</button>
-      <button type="button" id="toggleCdpBtn" nonce="${nonce}" title="Attach or detach Chrome DevTools bridge">Attach CDP</button>
-      <button type="button" id="clearTrafficBtn" nonce="${nonce}" title="Clear recorded traffic">Clear</button>
+      <button type="button" id="toggleProxyBtn" title="Start or stop local loopback proxy">Start Proxy</button>
+      <button type="button" id="toggleCdpBtn" title="Attach or detach Chrome DevTools bridge">Attach CDP</button>
+      <button type="button" id="clearTrafficBtn" title="Clear recorded traffic">Clear</button>
     </nav>
   </header>
 
@@ -439,19 +443,26 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
     });
 
     function getMethodClass(method) {
-      const m = (method || '').toLowerCase();
-      if (m === 'get') return 'method-get';
-      if (m === 'post') return 'method-post';
-      if (m === 'put' || m === 'patch') return 'method-put';
-      if (m === 'delete') return 'method-delete';
-      return 'method-other';
+      const m = (method || '').toUpperCase();
+      return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE' ? 'is-mutating' : '';
     }
 
     function getStatusColorClass(code) {
-      if (code >= 200 && code < 300) return 'status-2xx';
       if (code >= 400 && code < 500) return 'status-4xx';
       if (code >= 500) return 'status-5xx';
       return '';
+    }
+
+    function bindRowActivation(row) {
+      row.addEventListener('click', () => {
+        vscode.postMessage({ type: 'openWorkbench' });
+      });
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          vscode.postMessage({ type: 'openWorkbench' });
+        }
+      });
     }
 
     function renderState(data) {
@@ -466,7 +477,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         if (toggleProxyBtn) toggleProxyBtn.textContent = 'Stop Proxy';
       } else {
         proxyText.textContent = 'Off';
-        proxyDot.className = 'status-dot offline';
+        proxyDot.className = 'status-dot is-hidden';
         if (toggleProxyBtn) toggleProxyBtn.textContent = 'Start Proxy';
       }
 
@@ -481,7 +492,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         if (toggleCdpBtn) toggleCdpBtn.textContent = 'Detach CDP';
       } else {
         cdpText.textContent = 'Off';
-        cdpDot.className = 'status-dot offline';
+        cdpDot.className = 'status-dot is-hidden';
         if (toggleCdpBtn) toggleCdpBtn.textContent = 'Attach CDP';
       }
 
@@ -489,11 +500,12 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       if (stackBadge) {
         if (data.projectStack && data.projectStack.frameworkDisplayName) {
           const p = data.projectStack;
-          const ver = p.frameworkVersion ? ' v' + p.frameworkVersion : '';
-          stackBadge.textContent = p.frameworkDisplayName + ver + ' · ' + p.primaryClient;
+          const ver = p.frameworkVersion ? ' ' + String(p.frameworkVersion).split('.')[0] : '';
+          const client = p.primaryClient === 'angular-http' ? 'HttpClient' : p.primaryClient;
+          stackBadge.textContent = p.frameworkDisplayName + ver + ' · ' + client;
           stackBadge.title = p.conventions ? p.conventions.description : '';
         } else {
-          stackBadge.textContent = 'TypeScript / JS';
+          stackBadge.textContent = 'TS / JS';
         }
       }
 
@@ -508,14 +520,14 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         routeList.innerHTML = routes.map(r => {
           const isEnabled = r.enabled !== false;
           return \`
-            <div class="row-item \${!isEnabled ? 'disabled' : ''}" role="listitem" title="Click to inspect in Workbench">
+            <div class="row-item \${!isEnabled ? 'disabled' : ''}" role="listitem" tabindex="0" title="Click to inspect in Workbench">
               <button type="button" class="route-toggle-btn" data-id="\${escapeHtml(r.id)}" aria-pressed="\${isEnabled ? 'true' : 'false'}" aria-label="\${isEnabled ? 'Disable route' : 'Enable route'}" title="\${isEnabled ? 'Active (click to disable)' : 'Disabled (click to enable)'}">
-                <span class="status-dot \${isEnabled ? 'online' : 'offline'}"></span>
+                \${isEnabled ? '<span class="status-dot online" aria-hidden="true"></span>' : '<span>off</span>'}
               </button>
               <span class="method-badge \${getMethodClass(r.method)}">\${escapeHtml(r.method)}</span>
               <span class="url-text" title="\${escapeHtml(r.urlPattern)}">\${escapeHtml(r.urlPattern)}</span>
               <span class="meta-code \${getStatusColorClass(r.statusCode)}">\${r.statusCode}</span>
-              <button type="button" class="open-browser-btn" data-url="\${escapeHtml(r.urlPattern)}" aria-label="Open endpoint in browser" title="Open in browser" style="padding: 2px 4px; height: 18px;">
+              <button type="button" class="open-browser-btn" data-url="\${escapeHtml(r.urlPattern)}" aria-label="Open endpoint in browser" title="Open in browser">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
               </button>
             </div>
@@ -536,11 +548,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
           });
         });
 
-        routeList.querySelectorAll('.row-item').forEach(row => {
-          row.addEventListener('click', () => {
-            vscode.postMessage({ type: 'openWorkbench' });
-          });
-        });
+        routeList.querySelectorAll('.row-item').forEach(bindRowActivation);
       }
 
       const trafficList = document.getElementById('trafficList');
@@ -556,18 +564,14 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
         trafficList.innerHTML = '<div class="empty-state">No intercepted requests.</div>';
       } else {
         trafficList.innerHTML = [...traffic].reverse().map(t => \`
-          <div class="row-item" title="Click to inspect traffic in Workbench">
+          <div class="row-item" tabindex="0" title="Click to inspect traffic in Workbench">
             <span class="method-badge \${getMethodClass(t.method)}">\${escapeHtml(t.method)}</span>
             <span class="url-text" title="\${escapeHtml(t.url)}">\${escapeHtml(t.url)}</span>
             <span class="meta-code"><span class="\${getStatusColorClass(t.statusCode)}">\${t.statusCode}</span> · \${t.durationMs}ms</span>
           </div>
         \`).join('');
 
-        trafficList.querySelectorAll('.row-item').forEach(row => {
-          row.addEventListener('click', () => {
-            vscode.postMessage({ type: 'openWorkbench' });
-          });
-        });
+        trafficList.querySelectorAll('.row-item').forEach(bindRowActivation);
       }
     }
   </script>

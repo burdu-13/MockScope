@@ -280,4 +280,20 @@ describe('project-connector', () => {
     expect(restoredEnv).toContain(`apiUrl: 'https://api.example.com'`);
     expect(fs.existsSync(appProxy)).toBe(false);
   });
+
+  it('should merge proxy into an existing Vite server block without duplicating the server key', () => {
+    const viteConfig = path.join(tmpDir, 'vite.config.ts');
+    fs.writeFileSync(
+      viteConfig,
+      `import { defineConfig } from 'vite';\nexport default defineConfig({\n  server: {\n    port: 5173,\n  },\n});\n`
+    );
+
+    const connectRes = autoConnectProject(tmpDir, 45990, ['/api/users']);
+    expect(connectRes.success).toBe(true);
+    const updated = fs.readFileSync(viteConfig, 'utf-8');
+    const serverKeyMatches = updated.match(/\bserver\s*:/g) || [];
+    expect(serverKeyMatches).toHaveLength(1);
+    expect(updated).toContain('port: 5173');
+    expect(updated).toContain('127.0.0.1:45990');
+  });
 });

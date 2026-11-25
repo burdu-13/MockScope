@@ -1,6 +1,6 @@
 import { ICONS } from './workbench-templates';
 
-export function getWorkbenchClientScript(nonce: string): string {
+export function getWorkbenchClientScript(_nonce: string): string {
   return `
     let standaloneWs = null;
     const isVsCode = typeof acquireVsCodeApi === 'function';
@@ -42,11 +42,19 @@ export function getWorkbenchClientScript(nonce: string): string {
       hybridSeeder: { enabled: false, status: 'offline', recordCount: 0, sourceLabel: 'Offline Built-In' }
     };
 
-    let activeTab = 'discovered'; // 'discovered' | 'traffic' | 'routes'
+    let activeTab = 'discovered';
     let selectedId = null;
-    let pendingRouteTarget = null; // { method, url } when synthesizing a mock from inspector
+    let pendingRouteTarget = null;
     let filterText = '';
     let filterMethod = 'ALL';
+    let filterStatusClass = 'ALL';
+    let isTrafficPaused = false;
+    let isInspectorDirty = false;
+    let hasExternalUpdatePending = false;
+    let deleteConfirmTimer = null;
+    let expandedModelCallId = null;
+    let loadingModelKey = null;
+    const typeModelCache = new Map();
 
     function escapeHtml(value) {
       return String(value ?? '')
@@ -55,6 +63,38 @@ export function getWorkbenchClientScript(nonce: string): string {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    function toPlaywrightGlob(urlPattern) {
+      const normalized = String(urlPattern || '/')
+        .replace(/\\{([a-zA-Z0-9_]+)\\}/g, '*')
+        .replace(/:([a-zA-Z0-9_]+)/g, '*');
+      return '**' + (normalized.startsWith('/') ? normalized : '/' + normalized);
+    }
+
+    function toTitleCase(val) {
+      const s = String(val || '');
+      if (!s) return '';
+      return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+    }
+
+    function getModelCacheKey(call) {
+      const typeName = (call && (call.typeArgument || call.inferredShape)) || '';
+      return (call && call.fileName ? call.fileName : '') + '::' + typeName;
+    }
+
+    function requestTypeModel(call) {
+      const typeName = call && (call.typeArgument || call.inferredShape);
+      if (!typeName) return;
+      const key = getModelCacheKey(call);
+      if (typeModelCache.has(key)) return;
+      loadingModelKey = key;
+      vscode.postMessage({
+        type: 'inspectTypeModel',
+        requestKey: key,
+        typeName,
+        fileName: call.fileName,
+      });
     }
 
     const toggleHybridSeederBtn = document.getElementById('toggleHybridSeederBtn');
@@ -69,21 +109,46 @@ export function getWorkbenchClientScript(nonce: string): string {
     const tabRoutes = document.getElementById('tabRoutes');
     const filterInput = document.getElementById('filterInput');
     const methodFilter = document.getElementById('methodFilter');
+    const trafficToolbarExtra = document.getElementById('trafficToolbarExtra');
+    const pauseTrafficBtn = document.getElementById('pauseTrafficBtn');
     const itemList = document.getElementById('itemList');
     const rightPane = document.getElementById('rightPane');
 
     function setActiveTab(tab) {
       activeTab = tab;
-      tabDiscovered.classList.toggle('active', tab === 'discovered');
-      tabDiscovered.setAttribute('aria-selected', tab === 'discovered' ? 'true' : 'false');
-      tabRoutes.classList.toggle('active', tab === 'routes');
-      tabRoutes.setAttribute('aria-selected', tab === 'routes' ? 'true' : 'false');
-      tabTraffic.classList.toggle('active', tab === 'traffic');
-      tabTraffic.setAttribute('aria-selected', tab === 'traffic' ? 'true' : 'false');
+      isInspectorDirty = false;
+      hasExternalUpdatePending = false;
+      const tabs = [
+        { el: tabDiscovered, id: 'discovered' },
+        { el: tabRoutes, id: 'routes' },
+        { el: tabTraffic, id: 'traffic' }
+      ];
+      tabs.forEach(t => {
+        const active = t.id === tab;
+        t.el.classList.toggle('active', active);
+        t.el.setAttribute('aria-selected', active ? 'true' : 'false');
+        t.el.setAttribute('tabindex', active ? '0' : '-1');
+      });
+      if (trafficToolbarExtra) {
+        trafficToolbarExtra.classList.toggle('is-hidden', tab !== 'traffic');
+      }
       if (clearBtn) {
         clearBtn.title = tab === 'traffic' ? 'Clear recorded traffic ledger' : 'Clear search filter (Esc)';
       }
     }
+
+    [tabDiscovered, tabRoutes, tabTraffic].forEach((tabEl, idx, list) => {
+      tabEl.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          const nextIdx = e.key === 'ArrowRight'
+            ? (idx + 1) % list.length
+            : (idx - 1 + list.length) % list.length;
+          list[nextIdx].focus();
+          list[nextIdx].click();
+        }
+      });
+    });
 
     tabDiscovered.addEventListener('click', () => {
       setActiveTab('discovered');
@@ -103,10 +168,33 @@ export function getWorkbenchClientScript(nonce: string): string {
       render();
     });
 
+    if (pauseTrafficBtn) {
+      pauseTrafficBtn.addEventListener('click', () => {
+        isTrafficPaused = !isTrafficPaused;
+        pauseTrafficBtn.classList.toggle('active', isTrafficPaused);
+        pauseTrafficBtn.setAttribute('aria-pressed', isTrafficPaused ? 'true' : 'false');
+        pauseTrafficBtn.textContent = isTrafficPaused ? 'Resume Stream' : 'Pause Stream';
+        if (!isTrafficPaused) {
+          renderList();
+        }
+      });
+    }
+
+    document.querySelectorAll('.status-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        filterStatusClass = chip.getAttribute('data-status-filter') || 'ALL';
+        document.querySelectorAll('.status-chip').forEach(c => {
+          c.classList.toggle('active', c === chip);
+        });
+        renderList();
+      });
+    });
+
     if (toggleHybridSeederBtn) {
       toggleHybridSeederBtn.addEventListener('click', () => {
         toggleHybridSeederBtn.disabled = true;
-        toggleHybridSeederBtn.textContent = 'Syncing...';
+        const seederText = document.getElementById('seederText');
+        if (seederText) seederText.textContent = 'Seeder: Syncing';
         vscode.postMessage({ type: 'toggleHybridSeeder' });
       });
     }
@@ -130,13 +218,17 @@ export function getWorkbenchClientScript(nonce: string): string {
       vscode.postMessage({ type: 'scanWorkspace' });
     });
     clearBtn.addEventListener('click', () => {
-      if (activeTab === 'traffic' && !filterText && filterMethod === 'ALL') {
+      if (activeTab === 'traffic' && !filterText && filterMethod === 'ALL' && filterStatusClass === 'ALL') {
         vscode.postMessage({ type: 'clearTraffic' });
       } else {
         filterInput.value = '';
         filterText = '';
         methodFilter.value = 'ALL';
         filterMethod = 'ALL';
+        filterStatusClass = 'ALL';
+        document.querySelectorAll('.status-chip').forEach(c => {
+          c.classList.toggle('active', c.getAttribute('data-status-filter') === 'ALL');
+        });
         renderList();
       }
     });
@@ -154,12 +246,26 @@ export function getWorkbenchClientScript(nonce: string): string {
     addMockBtn.addEventListener('click', () => {
       setActiveTab('routes');
       selectedId = 'NEW_ROUTE';
+      isInspectorDirty = false;
       render();
     });
 
+    function isEditingInspector() {
+      const activeEl = document.activeElement;
+      return Boolean(activeEl && rightPane && rightPane.contains(activeEl) && (
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'SELECT'
+      ));
+    }
+
     window.addEventListener('message', (event) => {
       if (event.data.type === 'stateUpdate') {
+        const prevTraffic = state.traffic;
         state = { ...state, ...event.data };
+        if (isTrafficPaused && activeTab === 'traffic') {
+          state.traffic = prevTraffic;
+        }
         if (pendingRouteTarget && Array.isArray(state.routes)) {
           const matched = state.routes.find(
             (r) =>
@@ -172,7 +278,19 @@ export function getWorkbenchClientScript(nonce: string): string {
             pendingRouteTarget = null;
           }
         }
-        render();
+        renderHeaderAndCounts();
+        if (!(isTrafficPaused && activeTab === 'traffic')) {
+          renderList();
+        }
+        if (isInspectorDirty || isEditingInspector()) {
+          hasExternalUpdatePending = true;
+          const dirtyBanner = document.getElementById('dirtySyncBanner');
+          if (dirtyBanner) {
+            dirtyBanner.classList.remove('is-hidden');
+          }
+        } else {
+          renderInspector();
+        }
       } else if (event.data.type === 'scanStart') {
         state.isScanning = true;
         state.scanError = null;
@@ -187,6 +305,16 @@ export function getWorkbenchClientScript(nonce: string): string {
         state.discoveredCalls = event.data.calls || [];
         document.getElementById('discoveredCount').textContent = state.discoveredCalls.length;
         render();
+      } else if (event.data.type === 'typeModelDetails') {
+        if (event.data.requestKey && event.data.model) {
+          typeModelCache.set(event.data.requestKey, event.data.model);
+          if (loadingModelKey === event.data.requestKey) {
+            loadingModelKey = null;
+          }
+          if (activeTab === 'discovered') {
+            renderInspector();
+          }
+        }
       }
     });
 
@@ -197,12 +325,12 @@ export function getWorkbenchClientScript(nonce: string): string {
       if (!buttonElement) return;
       vscode.postMessage({ type: 'copyText', text: textToCopy, label });
       const originalHtml = buttonElement.innerHTML;
-      buttonElement.innerHTML = ICONS.check + ' <span>Copied!</span>';
-      buttonElement.classList.add('btn-success');
+      buttonElement.innerHTML = ICONS.check + ' <span>Copied</span>';
+      buttonElement.classList.add('is-copied');
       setTimeout(() => {
         buttonElement.innerHTML = originalHtml;
-        buttonElement.classList.remove('btn-success');
-      }, 1800);
+        buttonElement.classList.remove('is-copied');
+      }, 1600);
     }
 
     function syntaxHighlightJson(json) {
@@ -238,24 +366,7 @@ export function getWorkbenchClientScript(nonce: string): string {
       const bytes = new Blob([str]).size;
       const kb = (bytes / 1024).toFixed(1);
       const lines = str.split(String.fromCharCode(10)).length;
-      metricsEl.textContent = kb + ' KB • ' + lines + ' lines';
-    }
-
-    function getScenarioDescription(sc) {
-      switch (sc) {
-        case 'ok200': return 'Populated 200 OK: Full realistic data structure synthesized from TypeScript contracts with valid offline media.';
-        case 'loading200': return 'Loading State: Populated 200 OK response with simulated 2000ms latency to test frontend spinners, suspense boundaries, and skeleton loaders.';
-        case 'empty200': return 'Empty 200 OK: Zero-results collection structure (e.g. empty results array) to test frontend zero-data states and empty views.';
-        case 'mfa200': return '2FA Challenge 200: Two-factor authentication required. Frontend displays TOTP code entry form.';
-        case 'unauth401': return '401 Unauthorized: Bearer token rejected or expired. Frontend triggers session refresh or login screen.';
-        case 'forbidden403': return '403 Forbidden: Insufficient role permissions. Frontend displays access denied message.';
-        case 'notFound404': return '404 Not Found: Resource missing error to test frontend not-found pages, 404 alert banners, and recovery paths.';
-        case 'bad400': return '400 Bad Request: Field validation error payload to test frontend form validation states and error messages.';
-        case 'rateLimit429': return '429 Rate Limit: Upstream rate limit reached. Frontend displays retry backoff alert.';
-        case 'server500': return '500 Server Error: Internal server exception to test frontend error boundaries and alerts.';
-        case 'empty204': return '204 No Content: Successful response with empty body to test frontend zero-data actions.';
-        default: return 'Custom Mock Response: Configured status code and payload.';
-      }
+      metricsEl.textContent = kb + ' KB · ' + lines + ' lines';
     }
 
     const resizer = document.getElementById('paneResizer');
@@ -330,118 +441,139 @@ export function getWorkbenchClientScript(nonce: string): string {
           filterText = '';
           activeEl.blur();
           renderList();
+        } else if (filterText || filterMethod !== 'ALL' || filterStatusClass !== 'ALL') {
+          filterInput.value = '';
+          filterText = '';
+          methodFilter.value = 'ALL';
+          filterMethod = 'ALL';
+          filterStatusClass = 'ALL';
+          renderList();
         }
         return;
       }
 
       if (!isInputFocused) {
-        let currentItems = [];
-        if (activeTab === 'discovered') {
-          currentItems = (state.discoveredCalls || []).filter(c => {
-            const matchUrl = c.url.toLowerCase().includes(filterText);
-            const matchMethod = filterMethod === 'ALL' || c.method.toUpperCase() === filterMethod;
-            return matchUrl && matchMethod;
-          });
-        } else if (activeTab === 'traffic') {
-          currentItems = [...(state.traffic || [])].filter(t => {
-            const matchUrl = t.url.toLowerCase().includes(filterText);
-            const matchMethod = filterMethod === 'ALL' || t.method.toUpperCase() === filterMethod;
-            return matchUrl && matchMethod;
-          }).reverse();
-        } else {
-          currentItems = (state.routes || []).filter(r => {
-            const matchUrl = r.urlPattern.toLowerCase().includes(filterText);
-            const matchMethod = filterMethod === 'ALL' || r.method.toUpperCase() === filterMethod || r.method === '*';
-            return matchUrl && matchMethod;
-          });
-        }
-
+        const currentItems = getFilteredItemsForActiveTab();
         if (currentItems.length > 0) {
           const currentIdx = currentItems.findIndex(item => item.id === selectedId);
           if (e.key === 'ArrowDown' || e.key === 'j') {
             e.preventDefault();
             const nextIdx = currentIdx < currentItems.length - 1 ? currentIdx + 1 : 0;
             selectedId = currentItems[nextIdx].id;
+            isInspectorDirty = false;
             render();
-            const selectedCard = itemList.querySelector('.list-card.selected');
-            if (selectedCard && selectedCard.scrollIntoView) {
-              selectedCard.scrollIntoView({ block: 'nearest' });
+            const selectedRow = itemList.querySelector('.list-row.selected');
+            if (selectedRow && selectedRow.scrollIntoView) {
+              selectedRow.scrollIntoView({ block: 'nearest' });
             }
           } else if (e.key === 'ArrowUp' || e.key === 'k') {
             e.preventDefault();
             const prevIdx = currentIdx > 0 ? currentIdx - 1 : currentItems.length - 1;
             selectedId = currentItems[prevIdx].id;
+            isInspectorDirty = false;
             render();
-            const selectedCard = itemList.querySelector('.list-card.selected');
-            if (selectedCard && selectedCard.scrollIntoView) {
-              selectedCard.scrollIntoView({ block: 'nearest' });
+            const selectedRow = itemList.querySelector('.list-row.selected');
+            if (selectedRow && selectedRow.scrollIntoView) {
+              selectedRow.scrollIntoView({ block: 'nearest' });
             }
           }
         }
       }
     });
 
-    function render() {
+    function matchesTrafficStatusFilter(statusCode) {
+      if (filterStatusClass === 'ALL') return true;
+      if (filterStatusClass === '2XX') return statusCode >= 200 && statusCode < 300;
+      if (filterStatusClass === '4XX') return statusCode >= 400 && statusCode < 500;
+      if (filterStatusClass === '5XX') return statusCode >= 500;
+      return true;
+    }
+
+    function getFilteredItemsForActiveTab() {
+      if (activeTab === 'discovered') {
+        return (state.discoveredCalls || []).filter(c => {
+          const matchUrl = c.url.toLowerCase().includes(filterText);
+          const matchMethod = filterMethod === 'ALL' || c.method.toUpperCase() === filterMethod;
+          return matchUrl && matchMethod;
+        });
+      }
+      if (activeTab === 'traffic') {
+        return [...(state.traffic || [])].filter(t => {
+          const matchUrl = t.url.toLowerCase().includes(filterText);
+          const matchMethod = filterMethod === 'ALL' || t.method.toUpperCase() === filterMethod;
+          const matchStatus = matchesTrafficStatusFilter(t.statusCode);
+          return matchUrl && matchMethod && matchStatus;
+        }).reverse();
+      }
+      return (state.routes || []).filter(r => {
+        const matchUrl = r.urlPattern.toLowerCase().includes(filterText);
+        const matchMethod = filterMethod === 'ALL' || r.method.toUpperCase() === filterMethod || r.method === '*';
+        return matchUrl && matchMethod;
+      });
+    }
+
+    function renderHeaderAndCounts() {
       const seederDot = document.getElementById('seederDot');
       const seederText = document.getElementById('seederText');
-      const modeBadge = document.getElementById('modeBadge');
-      const hs = state.hybridSeeder || { enabled: false, status: 'offline', sourceLabel: 'Offline Built-In' };
+      const hs = state.hybridSeeder || { enabled: false, status: 'offline' };
       if (toggleHybridSeederBtn) {
         toggleHybridSeederBtn.disabled = false;
+        toggleHybridSeederBtn.setAttribute('aria-pressed', hs.enabled ? 'true' : 'false');
       }
       if (hs.enabled) {
-        if (seederText) seederText.textContent = hs.status === 'synced' ? 'Hybrid (' + (hs.recordCount || 48) + ')' : 'Fallback';
+        if (seederText) seederText.textContent = hs.status === 'synced' ? 'Seeder: Hybrid (' + (hs.recordCount || 48) + ')' : 'Seeder: Fallback';
         if (seederDot) seederDot.className = hs.status === 'synced' ? 'status-dot online' : 'status-dot warning';
-        if (toggleHybridSeederBtn) toggleHybridSeederBtn.textContent = 'Disable';
-        if (modeBadge) modeBadge.textContent = 'Hybrid';
       } else {
-        if (seederText) seederText.textContent = 'Built-In';
-        if (seederDot) seederDot.className = 'status-dot offline';
-        if (toggleHybridSeederBtn) toggleHybridSeederBtn.textContent = 'Hybrid API';
-        if (modeBadge) modeBadge.textContent = 'Offline';
+        if (seederText) seederText.textContent = 'Seeder: Local';
+        if (seederDot) seederDot.className = 'status-dot is-hidden';
       }
 
       const connectDot = document.getElementById('connectDot');
       const connectText = document.getElementById('connectText');
       const conn = state.projectConnection;
-      if (conn && conn.isConnected) {
-        if (connectText) connectText.textContent = conn.strategy ? conn.strategy.toUpperCase() : 'On';
+      const isAppConnected = Boolean(conn && conn.isConnected);
+      if (toggleConnectBtn) {
+        toggleConnectBtn.setAttribute('aria-pressed', isAppConnected ? 'true' : 'false');
+      }
+      if (isAppConnected) {
+        const label = conn.strategy ? toTitleCase(conn.strategy) : 'Connected';
+        if (connectText) connectText.textContent = 'App: ' + label;
         if (connectDot) connectDot.className = 'status-dot online';
-        if (toggleConnectBtn) {
-          toggleConnectBtn.textContent = 'Disconnect';
-          toggleConnectBtn.title = 'Disconnect app proxy and restore original config';
-        }
+        if (toggleConnectBtn) toggleConnectBtn.title = 'Click to disconnect dev server and restore config';
       } else {
-        if (connectText) connectText.textContent = 'Off';
-        if (connectDot) connectDot.className = 'status-dot offline';
-        if (toggleConnectBtn) {
-          toggleConnectBtn.textContent = 'Connect';
-          toggleConnectBtn.title = 'Connect dev server to MockScope (Vite, Next, Angular, Nuxt)';
-        }
+        if (connectText) connectText.textContent = 'App: Off';
+        if (connectDot) connectDot.className = 'status-dot is-hidden';
+        if (toggleConnectBtn) toggleConnectBtn.title = 'Click to connect dev server proxy (Vite, Next, Angular, Nuxt)';
       }
 
       const proxyDot = document.getElementById('proxyDot');
       const proxyText = document.getElementById('proxyText');
+      if (toggleProxyBtn) {
+        toggleProxyBtn.setAttribute('aria-pressed', state.proxy.running ? 'true' : 'false');
+      }
       if (state.proxy.running) {
-        proxyText.textContent = ':' + state.proxy.port;
-        proxyDot.className = 'status-dot online';
-        toggleProxyBtn.textContent = 'Stop';
+        if (proxyText) proxyText.textContent = 'Proxy :' + state.proxy.port;
+        if (proxyDot) proxyDot.className = 'status-dot online';
+        if (toggleProxyBtn) toggleProxyBtn.title = 'Click to stop local loopback proxy (127.0.0.1:' + state.proxy.port + ')';
       } else {
-        proxyText.textContent = 'Off';
-        proxyDot.className = 'status-dot offline';
-        toggleProxyBtn.textContent = 'Start';
+        if (proxyText) proxyText.textContent = 'Proxy Off';
+        if (proxyDot) proxyDot.className = 'status-dot is-hidden';
+        if (toggleProxyBtn) toggleProxyBtn.title = 'Click to start local loopback proxy (127.0.0.1:' + state.proxy.port + ')';
       }
 
       const cdpDot = document.getElementById('cdpDot');
       const cdpText = document.getElementById('cdpText');
+      if (toggleCdpBtn) {
+        toggleCdpBtn.setAttribute('aria-pressed', state.cdp.attached ? 'true' : 'false');
+      }
       if (state.cdp.attached) {
-        cdpText.textContent = ':' + state.cdp.port;
-        cdpDot.className = 'status-dot online';
-        toggleCdpBtn.textContent = 'Detach';
+        if (cdpText) cdpText.textContent = 'CDP :' + state.cdp.port;
+        if (cdpDot) cdpDot.className = 'status-dot online';
+        if (toggleCdpBtn) toggleCdpBtn.title = 'Click to detach browser CDP bridge';
       } else {
-        cdpText.textContent = 'Off';
-        cdpDot.className = 'status-dot offline';
-        toggleCdpBtn.textContent = 'Attach';
+        if (cdpText) cdpText.textContent = 'CDP: Off';
+        if (cdpDot) cdpDot.className = 'status-dot is-hidden';
+        if (toggleCdpBtn) toggleCdpBtn.title = 'Click to attach browser CDP bridge';
       }
 
       if (state.isScanning) {
@@ -457,153 +589,112 @@ export function getWorkbenchClientScript(nonce: string): string {
       document.getElementById('routeCount').textContent = state.routes.length;
 
       const stack = state.projectStack;
-      const stackBadge = document.getElementById('stackBadge');
-      if (stackBadge) {
+      const stackMeta = document.getElementById('stackMeta');
+      if (stackMeta) {
         if (stack && stack.frameworkDisplayName) {
-          const ver = stack.frameworkVersion ? ' v' + stack.frameworkVersion : '';
-          stackBadge.textContent = stack.frameworkDisplayName + ver + ' • ' + stack.primaryClient + ' • ' + (stack.hasTypeScript ? 'TypeScript' : 'JS');
-          stackBadge.title = stack.conventions ? stack.conventions.description : '';
+          const majorVer = stack.frameworkVersion ? ' ' + String(stack.frameworkVersion).split('.')[0] : '';
+          const clientLabel = stack.primaryClient === 'angular-http' ? 'HttpClient' : stack.primaryClient;
+          const lang = stack.hasTypeScript ? 'TS' : 'JS';
+          stackMeta.textContent = stack.frameworkDisplayName + majorVer + ' · ' + clientLabel + ' · ' + lang;
+          stackMeta.title = stack.conventions ? stack.conventions.description : '';
         } else {
-          stackBadge.textContent = 'TypeScript / JS';
+          stackMeta.textContent = 'TS / JS';
         }
       }
+    }
 
+    function render() {
+      renderHeaderAndCounts();
       renderList();
       renderInspector();
     }
 
     function getMethodTagClass(method) {
-      const m = (method || '').toLowerCase();
-      if (m === 'get') return 'tag-get';
-      if (m === 'post') return 'tag-post';
-      if (m === 'put') return 'tag-put';
-      if (m === 'patch') return 'tag-patch';
-      if (m === 'delete') return 'tag-delete';
-      return 'tag-other';
+      const m = (method || '').toUpperCase();
+      return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE' ? 'is-mutating' : '';
     }
 
     function getStatusClass(code) {
-      if (code >= 200 && code < 300) return 'status-2xx';
-      if (code >= 300 && code < 400) return 'status-3xx';
       if (code >= 400 && code < 500) return 'status-4xx';
-      return 'status-5xx';
+      if (code >= 500) return 'status-5xx';
+      return '';
     }
 
     function renderList() {
       itemList.innerHTML = '';
+      itemList.removeAttribute('aria-activedescendant');
 
       if (activeTab === 'discovered') {
         if (state.isScanning) {
           const loadingBanner = document.createElement('div');
           loadingBanner.className = 'banner-bar';
           loadingBanner.innerHTML = \`
-            <span style="display: flex; align-items: center; gap: 6px;">
+            <span class="inspector-row-group">
               <span class="status-dot online"></span>
               <span>Scanning workspace AST...</span>
             </span>
           \`;
           itemList.appendChild(loadingBanner);
-
-          for (let i = 0; i < 3; i++) {
-            const skel = document.createElement('div');
-            skel.className = 'list-card skeleton-card';
-            skel.innerHTML = \`
-              <div class="card-top">
-                <div class="skeleton-line" style="width: \${44 + i * 8}px;"></div>
-                <div class="skeleton-line" style="width: \${170 + i * 25}px;"></div>
-              </div>
-              <div class="card-sub" style="margin-top: 6px;">
-                <div class="skeleton-line" style="width: 120px;"></div>
-                <div class="skeleton-line" style="width: 60px;"></div>
-              </div>
-            \`;
-            itemList.appendChild(skel);
-          }
           return;
         }
 
         if (state.scanError) {
           const errorPrompt = document.createElement('div');
-          errorPrompt.className = 'empty-prompt';
-          errorPrompt.style.padding = '30px 10px';
+          errorPrompt.className = 'empty-prompt py-30';
           errorPrompt.innerHTML = \`
-            <div class="empty-icon-wrapper" style="border-color: var(--danger); color: var(--danger);">\${ICONS.trash}</div>
             <strong>AST Workspace Scan Failed</strong>
-            <span style="max-width: 280px; font-size: 11px; color: var(--danger);">\${escapeHtml(state.scanError)}</span>
-            <button id="retryScanBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
+            <span class="empty-sub">\${escapeHtml(state.scanError)}</span>
+            <button id="retryScanBtn" class="primary btn-compact mt-6">
               \${ICONS.search}
               <span>Retry Scan</span>
             </button>
           \`;
-          errorPrompt.querySelector('#retryScanBtn').addEventListener('click', () => {
-            scanBtn.click();
-          });
+          errorPrompt.querySelector('#retryScanBtn').addEventListener('click', () => scanBtn.click());
           itemList.appendChild(errorPrompt);
           return;
         }
 
         const calls = state.discoveredCalls || [];
-        const filtered = calls.filter(c => {
-          const matchUrl = c.url.toLowerCase().includes(filterText);
-          const matchMethod = filterMethod === 'ALL' || c.method.toUpperCase() === filterMethod;
-          return matchUrl && matchMethod;
-        });
+        const filtered = getFilteredItemsForActiveTab();
 
         if (calls.length > 0) {
           const banner = document.createElement('div');
           banner.className = 'banner-bar';
-          const isConn = state.projectConnection && state.projectConnection.isConnected;
           const unmockedCalls = calls.filter(call =>
             !state.routes.some(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'))
           );
           const allMocked = calls.length > 0 && unmockedCalls.length === 0;
           const someMocked = unmockedCalls.length > 0 && unmockedCalls.length < calls.length;
 
-          let mockBtnText = 'Auto-Mock All (' + calls.length + ')';
+          let mockBtnText = 'Mock All (' + calls.length + ')';
           let mockBtnIcon = ICONS.wand;
           let mockBtnClass = 'accent btn-compact';
-          let mockBtnTitle = 'Auto-generate realistic mock responses for all discovered endpoints';
+          let mockBtnTitle = 'Synthesize mocks for all discovered endpoints';
 
           if (allMocked) {
             mockBtnText = 'Regenerate All';
             mockBtnIcon = ICONS.refresh;
-            mockBtnClass = 'secondary btn-compact';
-            mockBtnTitle = 'All endpoints are already mocked. Click to regenerate with fresh synthetic data.';
+            mockBtnClass = 'btn-compact';
+            mockBtnTitle = 'All endpoints have routes. Regenerate with fresh synthetic payloads.';
           } else if (someMocked) {
             mockBtnText = 'Mock Remaining (' + unmockedCalls.length + ')';
             mockBtnIcon = ICONS.wand;
             mockBtnClass = 'accent btn-compact';
-            mockBtnTitle = 'Generate mocks for the ' + unmockedCalls.length + ' unmocked endpoints';
+            mockBtnTitle = 'Generate mocks for ' + unmockedCalls.length + ' unmocked endpoints';
           }
 
           banner.innerHTML = \`
             <span><strong>\${calls.length}</strong> endpoints</span>
-            <div style="display: flex; gap: 6px; align-items: center;">
-              \${!isConn ? \`
-                <button id="connectProjectBannerBtn" class="btn-compact" nonce="${nonce}" title="Connect dev server to MockScope">
-                  <span>Connect App</span>
-                </button>
-              \` : \`
-                <span class="mock-status-pill mocked">\${ICONS.check} Connected</span>
-              \`}
-              <button id="mockAllBtn" class="\${mockBtnClass}" nonce="${nonce}" title="\${mockBtnTitle}">
-                \${mockBtnIcon}
-                <span>\${mockBtnText}</span>
-              </button>
-            </div>
+            <button id="mockAllBtn" class="\${mockBtnClass}" title="\${mockBtnTitle}">
+              \${mockBtnIcon}
+              <span>\${mockBtnText}</span>
+            </button>
           \`;
           itemList.appendChild(banner);
 
-          const connectBannerBtn = banner.querySelector('#connectProjectBannerBtn');
-          if (connectBannerBtn) {
-            connectBannerBtn.addEventListener('click', () => {
-              vscode.postMessage({ type: 'connectProject' });
-            });
-          }
-
           banner.querySelector('#mockAllBtn').addEventListener('click', () => {
-            vscode.postMessage({ 
-              type: 'mockAllCalls', 
+            vscode.postMessage({
+              type: 'mockAllCalls',
               calls: state.discoveredCalls,
               force: allMocked
             });
@@ -612,41 +703,29 @@ export function getWorkbenchClientScript(nonce: string): string {
 
         if (calls.length > 0 && filtered.length === 0) {
           const emptyFilter = document.createElement('div');
-          emptyFilter.className = 'empty-prompt';
-          emptyFilter.style.padding = '30px 10px';
+          emptyFilter.className = 'empty-prompt py-30';
           emptyFilter.innerHTML = \`
-            <div class="empty-icon-wrapper">\${ICONS.search}</div>
             <strong>No matching endpoints</strong>
-            <span style="max-width: 280px; font-size: 11px;">No detected endpoints match your filter "<strong>\${escapeHtml(filterText)}</strong>".</span>
-            <button id="clearSearchBtn" class="btn-compact" nonce="${nonce}" style="margin-top: 6px;">Clear Filter</button>
+            <span class="empty-sub">No detected endpoints match "<strong>\${escapeHtml(filterText)}</strong>".</span>
+            <button id="clearSearchBtn" class="btn-compact mt-6">Clear Filter</button>
           \`;
-          emptyFilter.querySelector('#clearSearchBtn').addEventListener('click', () => {
-            filterInput.value = '';
-            filterText = '';
-            methodFilter.value = 'ALL';
-            filterMethod = 'ALL';
-            renderList();
-          });
+          emptyFilter.querySelector('#clearSearchBtn').addEventListener('click', () => clearBtn.click());
           itemList.appendChild(emptyFilter);
           return;
         }
 
         if (calls.length === 0) {
           const empty = document.createElement('div');
-          empty.className = 'empty-prompt';
-          empty.style.padding = '30px 10px';
+          empty.className = 'empty-prompt py-30';
           empty.innerHTML = \`
-            <div class="empty-icon-wrapper">\${ICONS.radar}</div>
             <strong>No API calls detected yet</strong>
-            <span style="max-width: 280px; font-size: 11px;">MockScope automatically scans fetch, axios, and useQuery endpoints across your workspace.</span>
-            <button id="emptyScanBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
+            <span class="empty-sub">Scans fetch, axios, useQuery, RTK Query, and HttpClient calls in workspace TypeScript/JS files.</span>
+            <button id="emptyScanBtn" class="primary btn-compact mt-6">
               \${ICONS.search}
               <span>Scan Workspace</span>
             </button>
           \`;
-          empty.querySelector('#emptyScanBtn').addEventListener('click', () => {
-            vscode.postMessage({ type: 'scanWorkspace' });
-          });
+          empty.querySelector('#emptyScanBtn').addEventListener('click', () => vscode.postMessage({ type: 'scanWorkspace' }));
           itemList.appendChild(empty);
           return;
         }
@@ -654,29 +733,61 @@ export function getWorkbenchClientScript(nonce: string): string {
         filtered.forEach(call => {
           const matchedRoute = state.routes.find(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
           const isAlreadyMocked = Boolean(matchedRoute);
+          const isRouteEnabled = Boolean(matchedRoute && matchedRoute.enabled !== false);
           const isSelected = selectedId === call.id;
-          const card = document.createElement('div');
-          card.className = 'list-card' + (isSelected ? ' selected' : '');
-          card.setAttribute('role', 'option');
-          card.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+          const row = document.createElement('div');
+          row.id = 'opt_' + call.id;
+          row.className = 'list-row' + (isSelected ? ' selected' : '');
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+          if (isSelected) itemList.setAttribute('aria-activedescendant', row.id);
           const filename = (call.fileName || '').split(/[\\\\/]/).pop() || '';
+          const locLabel = filename ? filename + ':' + (call.range.start.line + 1) : call.clientType;
 
-          card.innerHTML = \`
-            <div class="card-top">
+          row.innerHTML = \`
+            <div class="row-primary">
               <span class="method-tag \${getMethodTagClass(call.method)}">\${escapeHtml(call.method)}</span>
               <span class="path-text" title="\${escapeHtml(call.url)}">\${escapeHtml(call.url)}</span>
-              \${call.typeArgument ? \`<span class="type-tag" title="Generic return type: \${escapeHtml(call.typeArgument)}">&lt;\${escapeHtml(call.typeArgument)}&gt;</span>\` : ''}
             </div>
-            <div class="card-sub">
-              <span>\${escapeHtml(call.clientType)}\${filename ? ' in ' + escapeHtml(filename) : ''}</span>
-              \${isAlreadyMocked 
-                ? \`<span class="mock-status-pill mocked">\${ICONS.check} Active Mock</span>\` 
-                : \`<button type="button" class="mini-mock-btn btn-compact" style="padding: 2px 7px;">\${ICONS.plus} Mock</button>\`
+            <div class="row-meta">
+              <div class="row-meta-left">
+                <span class="row-source-text">\${escapeHtml(locLabel)}</span>
+                \${call.typeArgument ? \`<span aria-hidden="true">·</span><button type="button" class="inline-link-btn type-tag-btn" title="Inspect model definition for \${escapeHtml(call.typeArgument)}">&lt;\${escapeHtml(call.typeArgument)}&gt;</button>\` : ''}
+              </div>
+              \${isAlreadyMocked
+                ? \`<button type="button" class="inline-link-btn goto-route-btn" title="Open active route in Routes tab">\${isRouteEnabled ? 'Mocked' : 'Mocked (Off)'}</button>\`
+                : \`<button type="button" class="inline-link-btn mini-mock-btn">+ Mock</button>\`
               }
             </div>
           \`;
 
-          const mockBtn = card.querySelector('.mini-mock-btn');
+          const typeBtn = row.querySelector('.type-tag-btn');
+          if (typeBtn) {
+            typeBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              selectedId = call.id;
+              expandedModelCallId = call.id;
+              isInspectorDirty = false;
+              requestTypeModel(call);
+              render();
+              const modelSec = document.getElementById('modelDefinitionSection');
+              if (modelSec && modelSec.scrollIntoView) {
+                modelSec.scrollIntoView({ block: 'nearest' });
+              }
+            });
+          }
+
+          const gotoRouteBtn = row.querySelector('.goto-route-btn');
+          if (gotoRouteBtn && matchedRoute) {
+            gotoRouteBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              setActiveTab('routes');
+              selectedId = matchedRoute.id;
+              render();
+            });
+          }
+
+          const mockBtn = row.querySelector('.mini-mock-btn');
           if (mockBtn) {
             mockBtn.addEventListener('click', (e) => {
               e.stopPropagation();
@@ -684,119 +795,98 @@ export function getWorkbenchClientScript(nonce: string): string {
             });
           }
 
-          card.addEventListener('click', () => {
+          row.addEventListener('click', () => {
             selectedId = call.id;
+            isInspectorDirty = false;
             render();
           });
-          itemList.appendChild(card);
+          itemList.appendChild(row);
         });
       } else if (activeTab === 'traffic') {
-        const filtered = state.traffic.filter(t => {
-          const matchUrl = t.url.toLowerCase().includes(filterText);
-          const matchMethod = filterMethod === 'ALL' || t.method.toUpperCase() === filterMethod;
-          return matchUrl && matchMethod;
-        });
+        const filtered = getFilteredItemsForActiveTab();
 
         if (state.traffic.length > 0 && filtered.length === 0) {
           const emptyFilter = document.createElement('div');
-          emptyFilter.className = 'empty-prompt';
-          emptyFilter.style.padding = '30px 10px';
+          emptyFilter.className = 'empty-prompt py-30';
           emptyFilter.innerHTML = \`
-            <div class="empty-icon-wrapper">\${ICONS.search}</div>
             <strong>No matching traffic</strong>
-            <span style="max-width: 280px; font-size: 11px;">No recorded requests match "<strong>\${escapeHtml(filterText)}</strong>".</span>
-            <button id="clearTrafficFilterBtn" class="btn-compact" nonce="${nonce}" style="margin-top: 6px;">Clear Filter</button>
+            <span class="empty-sub">No recorded requests match current filters.</span>
+            <button id="clearTrafficFilterBtn" class="btn-compact mt-6">Clear Filter</button>
           \`;
-          emptyFilter.querySelector('#clearTrafficFilterBtn').addEventListener('click', () => {
-            filterInput.value = '';
-            filterText = '';
-            methodFilter.value = 'ALL';
-            filterMethod = 'ALL';
-            renderList();
-          });
+          emptyFilter.querySelector('#clearTrafficFilterBtn').addEventListener('click', () => clearBtn.click());
           itemList.appendChild(emptyFilter);
           return;
         }
 
         if (filtered.length === 0) {
           const empty = document.createElement('div');
-          empty.className = 'empty-prompt';
-          empty.style.padding = '30px 10px';
+          empty.className = 'empty-prompt py-30';
           empty.innerHTML = \`
-            <div class="empty-icon-wrapper">\${ICONS.activity}</div>
             <strong>No traffic recorded yet</strong>
-            <span style="max-width: 280px; font-size: 11px;">Make a request via proxy (127.0.0.1:45990) or attach CDP to record real-time requests.</span>
+            <span class="empty-sub">Send a request via 127.0.0.1:\${state.proxy.port} or attach CDP to capture traffic.</span>
           \`;
           itemList.appendChild(empty);
           return;
         }
 
-        [...filtered].reverse().forEach(t => {
+        filtered.forEach(t => {
           const isSelected = selectedId === t.id;
-          const card = document.createElement('div');
-          card.className = 'list-card' + (isSelected ? ' selected' : '');
-          card.setAttribute('role', 'option');
-          card.setAttribute('aria-selected', isSelected ? 'true' : 'false');
-          card.innerHTML = \`
-            <div class="card-top">
+          const row = document.createElement('div');
+          row.id = 'opt_' + t.id;
+          row.className = 'list-row' + (isSelected ? ' selected' : '');
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+          if (isSelected) itemList.setAttribute('aria-activedescendant', row.id);
+          const slowClass = (t.durationMs || 0) >= 1000 ? ' is-slow' : '';
+
+          row.innerHTML = \`
+            <div class="row-primary">
               <span class="method-tag \${getMethodTagClass(t.method)}">\${escapeHtml(t.method)}</span>
               <span class="path-text" title="\${escapeHtml(t.url)}">\${escapeHtml(t.url)}</span>
               <span class="status-code-tag \${getStatusClass(t.statusCode)}">\${t.statusCode}</span>
             </div>
-            <div class="card-sub">
-              <span class="mock-status-pill \${t.isMocked ? 'mocked' : 'pass'}">\${t.isMocked ? 'Mocked' : 'Passthrough'}</span>
-              <span>\${t.durationMs}ms</span>
+            <div class="row-meta">
+              <span>\${t.isMocked ? 'Mocked' : 'Passthrough'}</span>
+              <span class="traffic-duration\${slowClass}">\${t.durationMs}ms</span>
             </div>
           \`;
-          card.addEventListener('click', () => {
+          row.addEventListener('click', () => {
             selectedId = t.id;
+            isInspectorDirty = false;
             render();
           });
-          itemList.appendChild(card);
+          itemList.appendChild(row);
         });
       } else {
-        const filtered = state.routes.filter(r => {
-          const matchUrl = r.urlPattern.toLowerCase().includes(filterText);
-          const matchMethod = filterMethod === 'ALL' || r.method.toUpperCase() === filterMethod || r.method === '*';
-          return matchUrl && matchMethod;
-        });
+        const filtered = getFilteredItemsForActiveTab();
 
         if (state.routes.length > 0 && filtered.length === 0 && selectedId !== 'NEW_ROUTE') {
           const emptyFilter = document.createElement('div');
-          emptyFilter.className = 'empty-prompt';
-          emptyFilter.style.padding = '30px 10px';
+          emptyFilter.className = 'empty-prompt py-30';
           emptyFilter.innerHTML = \`
-            <div class="empty-icon-wrapper">\${ICONS.search}</div>
             <strong>No matching mock routes</strong>
-            <span style="max-width: 280px; font-size: 11px;">No active routes match "<strong>\${escapeHtml(filterText)}</strong>".</span>
-            <button id="clearRoutesFilterBtn" class="btn-compact" nonce="${nonce}" style="margin-top: 6px;">Clear Filter</button>
+            <span class="empty-sub">No active routes match "<strong>\${escapeHtml(filterText)}</strong>".</span>
+            <button id="clearRoutesFilterBtn" class="btn-compact mt-6">Clear Filter</button>
           \`;
-          emptyFilter.querySelector('#clearRoutesFilterBtn').addEventListener('click', () => {
-            filterInput.value = '';
-            filterText = '';
-            methodFilter.value = 'ALL';
-            filterMethod = 'ALL';
-            renderList();
-          });
+          emptyFilter.querySelector('#clearRoutesFilterBtn').addEventListener('click', () => clearBtn.click());
           itemList.appendChild(emptyFilter);
           return;
         }
 
         if (filtered.length === 0 && selectedId !== 'NEW_ROUTE') {
           const empty = document.createElement('div');
-          empty.className = 'empty-prompt';
-          empty.style.padding = '30px 10px';
+          empty.className = 'empty-prompt py-30';
           empty.innerHTML = \`
-            <div class="empty-icon-wrapper">\${ICONS.layers}</div>
             <strong>No mock routes active</strong>
-            <span style="max-width: 280px; font-size: 11px;">Configure mock endpoints or auto-mock from the Discovered APIs tab.</span>
-            <button id="emptyCreateBtn" class="primary btn-compact" nonce="${nonce}" style="margin-top: 6px;">
+            <span class="empty-sub">Create a route or synthesize mocks from the Discovered tab.</span>
+            <button id="emptyCreateBtn" class="primary btn-compact mt-6">
               \${ICONS.plus}
               <span>New Mock Route</span>
             </button>
           \`;
           empty.querySelector('#emptyCreateBtn').addEventListener('click', () => {
             selectedId = 'NEW_ROUTE';
+            isInspectorDirty = false;
             render();
           });
           itemList.appendChild(empty);
@@ -806,71 +896,74 @@ export function getWorkbenchClientScript(nonce: string): string {
         filtered.forEach(r => {
           const isSelected = selectedId === r.id;
           const isEnabled = r.enabled !== false;
-          const card = document.createElement('div');
-          card.className = 'list-card' + (isSelected ? ' selected' : '') + (!isEnabled ? ' disabled-route' : '');
-          card.setAttribute('role', 'option');
-          card.setAttribute('aria-selected', isSelected ? 'true' : 'false');
-          card.innerHTML = \`
-            <div class="card-top">
+          const row = document.createElement('div');
+          row.id = 'opt_' + r.id;
+          row.className = 'list-row' + (isSelected ? ' selected' : '') + (!isEnabled ? ' disabled-route' : '');
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+          if (isSelected) itemList.setAttribute('aria-activedescendant', row.id);
+          row.innerHTML = \`
+            <div class="row-primary">
               <span class="method-tag \${getMethodTagClass(r.method)}">\${escapeHtml(r.method)}</span>
               <span class="path-text" title="\${escapeHtml(r.urlPattern)}">\${escapeHtml(r.urlPattern)}</span>
               <span class="status-code-tag \${getStatusClass(r.statusCode)}">\${r.statusCode}</span>
             </div>
-            <div class="card-sub">
+            <div class="row-meta">
               <button type="button" class="route-toggle-pill" title="\${isEnabled ? 'Click to disable route' : 'Click to enable route'}" aria-pressed="\${isEnabled ? 'true' : 'false'}">
-                <span class="status-dot \${isEnabled ? 'online' : 'offline'}"></span>
+                \${isEnabled ? '<span class="status-dot online" aria-hidden="true"></span>' : ''}
                 <span>\${isEnabled ? 'Active' : 'Disabled'}</span>
               </button>
-              <span>\${r.delayMs ? r.delayMs + 'ms delay' : 'Instant'}</span>
+              <span class="traffic-duration">\${r.delayMs ? r.delayMs + 'ms' : '0ms'}</span>
             </div>
           \`;
-          const togglePill = card.querySelector('.route-toggle-pill');
+          const togglePill = row.querySelector('.route-toggle-pill');
           if (togglePill) {
             togglePill.addEventListener('click', (e) => {
               e.stopPropagation();
               vscode.postMessage({ type: 'toggleRoute', routeId: r.id });
             });
           }
-          card.addEventListener('click', () => {
+          row.addEventListener('click', () => {
             selectedId = r.id;
+            isInspectorDirty = false;
             render();
           });
-          itemList.appendChild(card);
+          itemList.appendChild(row);
         });
       }
     }
 
+    function renderEmptyInspector() {
+      rightPane.innerHTML = \`
+        <div class="empty-prompt">
+          <span aria-hidden="true">\${ICONS.radar}</span>
+          <strong class="empty-title-lg">No Endpoint Selected</strong>
+          <span class="empty-desc-lg">Select an endpoint, route, or traffic entry to inspect TypeScript contracts, switch scenarios, or edit responses.</span>
+          <div class="empty-kbd-inline">/ filter · j / k navigate · Ctrl+S save · Esc clear</div>
+        </div>
+      \`;
+    }
+
     function renderInspector() {
       if (!selectedId) {
-        rightPane.innerHTML = \`
-          <div class="empty-prompt">
-            <div class="empty-icon-wrapper">\${ICONS.radar}</div>
-            <strong style="color: var(--fg); font-size: 13px; font-weight: 600;">No Endpoint Selected</strong>
-            <span style="font-size: 12px; color: var(--muted); max-width: 360px;">Select an endpoint or route from the list to inspect contracts, switch test scenarios, or edit JSON payloads.</span>
-            <div class="feature-pills">
-              <div class="feature-card">
-                <div class="feature-card-header">\${ICONS.wand} <strong>Type Synthesis</strong></div>
-                <span>Derives payloads from TypeScript generics and control-flow predicates.</span>
-              </div>
-              <div class="feature-card">
-                <div class="feature-card-header">\${ICONS.activity} <strong>Stateful Proxy</strong></div>
-                <span>Persists CRUD mutations and cross-endpoint foreign keys on 127.0.0.1.</span>
-              </div>
-              <div class="feature-card">
-                <div class="feature-card-header">\${ICONS.code} <strong>Test Exporter</strong></div>
-                <span>Exports Playwright page.route() and MSW v2 handlers.</span>
-              </div>
-            </div>
-          </div>
-        \`;
+        renderEmptyInspector();
         return;
       }
 
       if (activeTab === 'discovered') {
         const call = (state.discoveredCalls || []).find(c => c.id === selectedId);
-        if (!call) return;
+        if (!call) {
+          selectedId = null;
+          renderEmptyInspector();
+          return;
+        }
         const matchedRoute = state.routes.find(r => r.urlPattern === call.url && (r.method === call.method || r.method === '*'));
         const isAlreadyMocked = Boolean(matchedRoute);
+        const typeLabel = call.typeArgument || call.inferredShape;
+        const modelCacheKey = getModelCacheKey(call);
+        const resolvedModel = typeLabel ? typeModelCache.get(modelCacheKey) : null;
+        const isModelExpanded = Boolean(typeLabel && expandedModelCallId === call.id);
+        const isModelLoading = Boolean(typeLabel && loadingModelKey === modelCacheKey);
 
         rightPane.innerHTML = \`
           <div class="inspector-header">
@@ -880,59 +973,151 @@ export function getWorkbenchClientScript(nonce: string): string {
             </div>
             <div class="inspector-actions">
               \${isAlreadyMocked ? \`
-                <button type="button" id="openDiscoveredInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
+                <button type="button" id="openDiscoveredInBrowserBtn" title="Preview mock endpoint in browser">
                   \${ICONS.external}
                   <span>Open in Browser</span>
                 </button>
-                <button type="button" id="viewActiveRouteBtn" nonce="${nonce}" title="Inspect and edit the active mock route">
+                <button type="button" id="viewActiveRouteBtn" title="Inspect and edit the active mock route">
                   \${ICONS.layers}
                   <span>Edit Route</span>
                 </button>
               \` : ''}
-              <button type="button" id="inspectMockBtn" class="accent" nonce="${nonce}">
+              <button type="button" id="inspectMockBtn" class="accent">
                 \${ICONS.wand}
-                <span>\${isAlreadyMocked ? 'Regenerate Mock' : 'Auto-Synthesize Mock'}</span>
+                <span>\${isAlreadyMocked ? 'Regenerate Mock' : 'Synthesize Mock'}</span>
               </button>
             </div>
           </div>
           <div class="inspector-body">
-            <div class="form-row">
-              <div class="form-group" style="flex: 1;">
-                <label for="discClientInput">HTTP Client</label>
-                <input type="text" id="discClientInput" readonly value="\${escapeHtml(call.clientType)}">
-              </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="discTypeInput">TypeScript Generic Return Type</label>
-                <input type="text" id="discTypeInput" readonly value="\${escapeHtml(call.typeArgument || 'None (auto-inferred)')}">
-              </div>
-            </div>
+            <dl class="kv-list">
+              <dt>Client</dt>
+              <dd><span class="kv-value-text">\${escapeHtml(call.clientType)}</span></dd>
 
-            <div class="form-group">
-              <label for="discLocInput">Source Code Location</label>
-              <div class="input-with-action">
-                <input type="text" id="discLocInput" readonly value="\${escapeHtml(call.fileName || 'source.ts')} (Line \${call.range.start.line + 1})">
-                \${call.fileName ? \`
-                  <button type="button" id="openSourceBtn" nonce="${nonce}" title="Jump to call site in VS Code editor">
-                    \${ICONS.code}
-                    <span>Open in Editor</span>
+              <dt>Return Type</dt>
+              <dd>
+                <span class="kv-value-text">\${escapeHtml(typeLabel || 'Unannotated (inferred)')}</span>
+                \${typeLabel ? \`
+                  <button type="button" id="inspectTypeModelBtn" class="inline-link-btn" title="Toggle underlying TypeScript model definition">
+                    \${isModelExpanded ? 'Hide Definition' : 'Inspect Definition'}
                   </button>
                 \` : ''}
-              </div>
-            </div>
+              </dd>
 
-            <div class="form-group">
-              <label>
-                <span>Detected Expression in Source</span>
-                <button type="button" id="copyExprBtn" class="btn-compact" nonce="${nonce}" title="Copy code expression">\${ICONS.copy} Copy</button>
-              </label>
-              <div class="tab-content-panel">\${escapeHtml(call.rawExpression)}</div>
-            </div>
+              <dt>Source</dt>
+              <dd>
+                \${call.fileName ? \`
+                  <button type="button" id="openSourceBtn" class="inline-link-btn kv-value-text" title="Open \${escapeHtml(call.fileName)} in editor">
+                    \${escapeHtml(call.fileName)}:\${call.range.start.line + 1}
+                  </button>
+                \` : '<span class="kv-value-text">OpenAPI Schema</span>'}
+              </dd>
+            </dl>
 
-            <div class="info-callout">
-              <strong>Zero-Configuration Mock Guarantee:</strong> MockScope analyzes this call site's TypeScript type <code>&lt;\${escapeHtml(call.typeArgument || 'Object')}&gt;</code> and generates matching realistic data deterministically without requiring manual schema definitions.
-            </div>
+            \${isModelExpanded ? \`
+              <section id="modelDefinitionSection" class="inspector-section" aria-label="TypeScript Model Definition">
+                <div class="model-header-meta">
+                  <div class="inspector-row-group">
+                    <span class="inspector-sublabel">Type Definition</span>
+                    <span class="model-kind-text">\${escapeHtml(resolvedModel ? (resolvedModel.kind || 'type') + ' ' + resolvedModel.baseTypeName : typeLabel)}</span>
+                    \${resolvedModel && resolvedModel.filePath ? \`
+                      <button type="button" id="gotoModelDefBtn" class="inline-link-btn model-file-loc" title="Open \${escapeHtml(resolvedModel.filePath)} in editor">
+                        \${escapeHtml(resolvedModel.filePath.split(/[\\\\/]/).pop())}\${typeof resolvedModel.line === 'number' ? ':' + (resolvedModel.line + 1) : ''}
+                      </button>
+                    \` : ''}
+                  </div>
+                  \${resolvedModel ? \`
+                    <button type="button" id="copyModelDefBtn" class="btn-compact" title="Copy TypeScript model definition">
+                      \${ICONS.copy}
+                      <span>Copy</span>
+                    </button>
+                  \` : ''}
+                </div>
+                \${isModelLoading && !resolvedModel
+                  ? '<div class="metric-pill">Resolving TypeScript model definition...</div>'
+                  : \`<pre class="code-surface">\${escapeHtml(resolvedModel ? resolvedModel.definitionText : '// Unable to resolve model.')}</pre>\`
+                }
+                \${resolvedModel && Array.isArray(resolvedModel.relatedModels) && resolvedModel.relatedModels.length > 0 ? \`
+                  <div class="related-models-list">
+                    \${resolvedModel.relatedModels.map((rel, relIdx) => \`
+                      <div class="inspector-section">
+                        <div class="model-header-meta">
+                          <div class="inspector-row-group">
+                            <span class="model-kind-text">\${escapeHtml(rel.kind)} \${escapeHtml(rel.name)}</span>
+                            \${rel.filePath ? \`
+                              <button type="button" class="inline-link-btn model-file-loc goto-related-model-btn" data-rel-idx="\${relIdx}" title="Open \${escapeHtml(rel.filePath)}">
+                                \${escapeHtml(rel.filePath.split(/[\\\\/]/).pop())}\${typeof rel.line === 'number' ? ':' + (rel.line + 1) : ''}
+                              </button>
+                            \` : ''}
+                          </div>
+                        </div>
+                        <pre class="code-surface">\${escapeHtml(rel.definitionText)}</pre>
+                      </div>
+                    \`).join('')}
+                  </div>
+                \` : ''}
+              </section>
+            \` : ''}
+
+            <details open class="inspector-section">
+              <summary>
+                <span class="summary-title-group">
+                  <svg class="chevron-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  <span>Call Expression</span>
+                </span>
+                <button type="button" id="copyExprBtn" class="btn-compact" title="Copy code expression">\${ICONS.copy} Copy</button>
+              </summary>
+              <pre class="code-surface code-surface-wrap">\${escapeHtml(call.rawExpression)}</pre>
+            </details>
           </div>
         \`;
+
+        const inspectTypeModelBtn = document.getElementById('inspectTypeModelBtn');
+        if (inspectTypeModelBtn) {
+          inspectTypeModelBtn.addEventListener('click', () => {
+            if (expandedModelCallId === call.id) {
+              expandedModelCallId = null;
+              renderInspector();
+            } else {
+              expandedModelCallId = call.id;
+              requestTypeModel(call);
+              renderInspector();
+            }
+          });
+        }
+
+        const gotoModelDefBtn = document.getElementById('gotoModelDefBtn');
+        if (gotoModelDefBtn && resolvedModel && resolvedModel.filePath) {
+          gotoModelDefBtn.addEventListener('click', () => {
+            vscode.postMessage({
+              type: 'openSourceLocation',
+              fileName: resolvedModel.filePath,
+              line: resolvedModel.line || 0,
+              character: 0,
+            });
+          });
+        }
+
+        const copyModelDefBtn = document.getElementById('copyModelDefBtn');
+        if (copyModelDefBtn && resolvedModel) {
+          copyModelDefBtn.addEventListener('click', () => {
+            copyWithFeedback(copyModelDefBtn, resolvedModel.definitionText, 'TypeScript model');
+          });
+        }
+
+        document.querySelectorAll('.goto-related-model-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const idx = parseInt(btn.getAttribute('data-rel-idx') || '-1', 10);
+            const rel = resolvedModel && resolvedModel.relatedModels && resolvedModel.relatedModels[idx];
+            if (rel && rel.filePath) {
+              vscode.postMessage({
+                type: 'openSourceLocation',
+                fileName: rel.filePath,
+                line: rel.line || 0,
+                character: 0,
+              });
+            }
+          });
+        });
 
         document.getElementById('inspectMockBtn').addEventListener('click', () => {
           pendingRouteTarget = { method: call.method, url: call.url };
@@ -974,13 +1159,19 @@ export function getWorkbenchClientScript(nonce: string): string {
 
         const copyExprBtn = document.getElementById('copyExprBtn');
         if (copyExprBtn) {
-          copyExprBtn.addEventListener('click', () => {
+          copyExprBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             copyWithFeedback(copyExprBtn, call.rawExpression, 'code expression');
           });
         }
       } else if (activeTab === 'traffic') {
         const item = state.traffic.find(t => t.id === selectedId);
-        if (!item) return;
+        if (!item) {
+          selectedId = null;
+          renderEmptyInspector();
+          return;
+        }
 
         rightPane.innerHTML = \`
           <div class="inspector-header">
@@ -990,68 +1181,101 @@ export function getWorkbenchClientScript(nonce: string): string {
               <span class="status-code-tag \${getStatusClass(item.statusCode)}">\${item.statusCode}</span>
             </div>
             <div class="inspector-actions">
-              <button type="button" id="openTrafficInBrowserBtn" nonce="${nonce}" title="Preview endpoint in browser">
+              <button type="button" id="replayTrafficBtn" title="Replay this HTTP request against the local MockScope proxy">
+                \${ICONS.play}
+                <span>Replay</span>
+              </button>
+              <button type="button" id="openTrafficInBrowserBtn" title="Preview endpoint in browser">
                 \${ICONS.external}
                 <span>Open in Browser</span>
               </button>
-              <button type="button" id="promoteMockBtn" class="primary" nonce="${nonce}">
+              <button type="button" id="promoteMockBtn" class="primary">
                 \${ICONS.plus}
-                <span>Convert to Mock Route</span>
+                <span>Save as Route</span>
               </button>
             </div>
           </div>
           <div class="inspector-body">
-            <div class="form-row">
-              <div class="form-group" style="flex: 1;">
-                <label for="trafficLatencyInput">Status & Latency</label>
-                <input type="text" id="trafficLatencyInput" readonly value="\${item.statusCode} (\${item.durationMs}ms)">
-              </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="trafficModeInput">Interception Mode</label>
-                <input type="text" id="trafficModeInput" readonly value="\${item.isMocked ? 'Mocked Response' : 'Upstream Passthrough'}">
-              </div>
-            </div>
+            <dl class="kv-list">
+              <dt>Status</dt>
+              <dd><span class="traffic-duration \${getStatusClass(item.statusCode)}">\${item.statusCode} · \${item.durationMs}ms</span></dd>
+              <dt>Interception</dt>
+              <dd><span>\${item.isMocked ? 'Mocked' : 'Upstream Passthrough'}</span></dd>
+            </dl>
 
-            <div class="form-group">
-              <label>
-                <span>Request Headers (Sanitized)</span>
-                <button type="button" id="copyReqHdrBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
-              </label>
-              <div class="tab-content-panel">\${escapeHtml(JSON.stringify(item.requestHeaders, null, 2))}</div>
-            </div>
+            <details open class="inspector-section">
+              <summary>
+                <span class="summary-title-group">
+                  <svg class="chevron-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  <span>Response Body</span>
+                </span>
+                <button type="button" id="copyResBodyBtn" class="btn-compact">\${ICONS.copy} Copy</button>
+              </summary>
+              <div class="json-formatted-view">\${syntaxHighlightJson(item.responseBody || '(empty body)')}</div>
+            </details>
+
+            <details open class="inspector-section">
+              <summary>
+                <span class="summary-title-group">
+                  <svg class="chevron-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  <span>Request Headers (Sanitized)</span>
+                </span>
+                <button type="button" id="copyReqHdrBtn" class="btn-compact">\${ICONS.copy} Copy</button>
+              </summary>
+              <pre class="code-surface code-surface-wrap">\${escapeHtml(JSON.stringify(item.requestHeaders, null, 2))}</pre>
+            </details>
 
             \${item.requestBody ? \`
-              <div class="form-group">
-                <label>Request Body</label>
-                <div class="tab-content-panel">\${escapeHtml(item.requestBody)}</div>
-              </div>
+              <details open class="inspector-section">
+                <summary>
+                  <span class="summary-title-group">
+                    <svg class="chevron-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    <span>Request Body</span>
+                  </span>
+                </summary>
+                <pre class="code-surface code-surface-wrap">\${escapeHtml(item.requestBody)}</pre>
+              </details>
             \` : ''}
 
-            <div class="form-group">
-              <label>Response Headers</label>
-              <div class="tab-content-panel">\${escapeHtml(JSON.stringify(item.responseHeaders, null, 2))}</div>
-            </div>
-
-            <div class="form-group">
-              <label>
-                <span>Response Body</span>
-                <button type="button" id="copyResBodyBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
-              </label>
-              <div class="json-formatted-view">\${syntaxHighlightJson(item.responseBody || '(empty body)')}</div>
-            </div>
+            <details class="inspector-section">
+              <summary>
+                <span class="summary-title-group">
+                  <svg class="chevron-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  <span>Response Headers</span>
+                </span>
+              </summary>
+              <pre class="code-surface code-surface-wrap">\${escapeHtml(JSON.stringify(item.responseHeaders, null, 2))}</pre>
+            </details>
           </div>
         \`;
 
+        const replayTrafficBtn = document.getElementById('replayTrafficBtn');
+        if (replayTrafficBtn) {
+          replayTrafficBtn.addEventListener('click', () => {
+            replayTrafficBtn.disabled = true;
+            replayTrafficBtn.innerHTML = ICONS.refresh + ' <span>Replaying...</span>';
+            vscode.postMessage({ type: 'replayTraffic', entry: item });
+            setTimeout(() => {
+              replayTrafficBtn.disabled = false;
+              replayTrafficBtn.innerHTML = ICONS.play + ' <span>Replay</span>';
+            }, 600);
+          });
+        }
+
         const copyReqHdrBtn = document.getElementById('copyReqHdrBtn');
         if (copyReqHdrBtn) {
-          copyReqHdrBtn.addEventListener('click', () => {
+          copyReqHdrBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             copyWithFeedback(copyReqHdrBtn, JSON.stringify(item.requestHeaders, null, 2), 'Request Headers');
           });
         }
 
         const copyResBodyBtn = document.getElementById('copyResBodyBtn');
         if (copyResBodyBtn) {
-          copyResBodyBtn.addEventListener('click', () => {
+          copyResBodyBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             copyWithFeedback(copyResBodyBtn, item.responseBody || '', 'Response Body');
           });
         }
@@ -1086,6 +1310,7 @@ export function getWorkbenchClientScript(nonce: string): string {
           vscode.postMessage({ type: 'saveRoute', route: newRoute });
           setActiveTab('routes');
           selectedId = newRoute.id;
+          isInspectorDirty = false;
           render();
         });
       } else {
@@ -1093,47 +1318,59 @@ export function getWorkbenchClientScript(nonce: string): string {
           ? { id: 'route_' + Date.now(), method: 'GET', urlPattern: '/api/v1/resource', statusCode: 200, delayMs: 0, body: { message: 'Sample mock response' }, enabled: true, source: 'manual' }
           : state.routes.find(r => r.id === selectedId);
 
-        if (!route) return;
+        if (!route) {
+          selectedId = null;
+          renderEmptyInspector();
+          return;
+        }
 
         const isEnabled = route.enabled !== false;
         const bodyStr = typeof route.body === 'string' ? route.body : JSON.stringify(route.body, null, 2);
+        const primaryScenarios = new Set(['ok200', 'loading200', 'empty200', 'unauth401', 'notFound404', 'server500']);
+        const activeScenario = route.scenario || 'ok200';
+        const isSecondaryScenario = !primaryScenarios.has(activeScenario);
 
         rightPane.innerHTML = \`
           <div class="inspector-header">
             <div class="inspector-title">
               <span class="method-tag \${getMethodTagClass(route.method)}">\${escapeHtml(route.method)}</span>
-              <span class="path-display" title="\${escapeHtml(route.urlPattern)}">\${selectedId === 'NEW_ROUTE' ? 'Create New Mock Route' : escapeHtml(route.urlPattern)}</span>
+              <span class="path-display" title="\${escapeHtml(route.urlPattern)}">\${selectedId === 'NEW_ROUTE' ? 'New Mock Route' : escapeHtml(route.urlPattern)}</span>
             </div>
             <div class="inspector-actions">
               \${selectedId !== 'NEW_ROUTE' ? \`
-                <button type="button" id="openInBrowserBtn" nonce="${nonce}" title="Preview mock endpoint in browser">
+                <button type="button" id="openInBrowserBtn" title="Preview mock endpoint in browser">
                   \${ICONS.external}
-                  <span>Open in Browser</span>
+                  <span>Open</span>
                 </button>
-                <button type="button" id="copyPlaywrightBtn" nonce="${nonce}" title="Copy Playwright page.route() test spec">
+                <button type="button" id="copyPlaywrightBtn" title="Copy Playwright page.route() test spec">
                   \${ICONS.copy}
                   <span>Playwright</span>
                 </button>
-                <button type="button" id="copyMswBtn" nonce="${nonce}" title="Copy MSW v2 http handler">
+                <button type="button" id="copyMswBtn" title="Copy MSW v2 http handler">
                   \${ICONS.copy}
-                  <span>MSW v2</span>
+                  <span>MSW</span>
                 </button>
-                <button type="button" id="deleteRouteBtn" class="danger" nonce="${nonce}" title="Delete this mock route">
+                <button type="button" id="deleteRouteBtn" class="danger" title="Delete this mock route">
                   \${ICONS.trash}
                   <span>Delete</span>
                 </button>
               \` : ''}
-              <button type="button" id="saveRouteBtn" class="primary" nonce="${nonce}" title="Save route changes (Ctrl+S)">
+              <button type="button" id="saveRouteBtn" class="primary" title="Save route changes (Ctrl+S)">
                 \${ICONS.save}
-                <span>Save Route</span>
+                <span>Save</span>
               </button>
             </div>
           </div>
           <div class="inspector-body">
+            <div id="dirtySyncBanner" class="dirty-banner \${hasExternalUpdatePending ? '' : 'is-hidden'}" role="status">
+              <span>Route state updated externally while editing.</span>
+              <button type="button" id="reloadDirtyRouteBtn" class="btn-compact">Reload</button>
+            </div>
+
             <div class="form-row">
-              <div class="form-group" style="width: 140px;">
-                <label for="editMethod">HTTP Method</label>
-                <select id="editMethod" nonce="${nonce}">
+              <div class="form-group w-140">
+                <label for="editMethod">Method</label>
+                <select id="editMethod">
                   <option value="GET" \${route.method === 'GET' ? 'selected' : ''}>GET</option>
                   <option value="POST" \${route.method === 'POST' ? 'selected' : ''}>POST</option>
                   <option value="PUT" \${route.method === 'PUT' ? 'selected' : ''}>PUT</option>
@@ -1142,16 +1379,16 @@ export function getWorkbenchClientScript(nonce: string): string {
                   <option value="*" \${route.method === '*' ? 'selected' : ''}>* (ANY)</option>
                 </select>
               </div>
-              <div class="form-group" style="flex: 1;">
-                <label for="editUrlPattern">URL Pattern (supports wildcards * and :param)</label>
-                <input type="text" id="editUrlPattern" value="\${escapeHtml(route.urlPattern)}" nonce="${nonce}">
+              <div class="form-group flex-1">
+                <label for="editUrlPattern">URL Pattern (*, :param, ?query)</label>
+                <input type="text" id="editUrlPattern" value="\${escapeHtml(route.urlPattern)}">
               </div>
             </div>
 
             <div class="form-row">
-              <div class="form-group" style="flex: 1;">
-                <label for="editStatusCode">HTTP Status Code</label>
-                <select id="editStatusCode" nonce="${nonce}">
+              <div class="form-group flex-1">
+                <label for="editStatusCode">Status</label>
+                <select id="editStatusCode">
                   <option value="200" \${route.statusCode === 200 ? 'selected' : ''}>200 OK</option>
                   <option value="201" \${route.statusCode === 201 ? 'selected' : ''}>201 Created</option>
                   <option value="204" \${route.statusCode === 204 ? 'selected' : ''}>204 No Content</option>
@@ -1159,86 +1396,107 @@ export function getWorkbenchClientScript(nonce: string): string {
                   <option value="401" \${route.statusCode === 401 ? 'selected' : ''}>401 Unauthorized</option>
                   <option value="403" \${route.statusCode === 403 ? 'selected' : ''}>403 Forbidden</option>
                   <option value="404" \${route.statusCode === 404 ? 'selected' : ''}>404 Not Found</option>
+                  <option value="422" \${route.statusCode === 422 ? 'selected' : ''}>422 Unprocessable</option>
                   <option value="429" \${route.statusCode === 429 ? 'selected' : ''}>429 Rate Limit</option>
                   <option value="500" \${route.statusCode === 500 ? 'selected' : ''}>500 Server Error</option>
+                  <option value="503" \${route.statusCode === 503 ? 'selected' : ''}>503 Service Unavailable</option>
                 </select>
               </div>
-              <div class="form-group" style="width: 150px;">
-                <label for="toggleRouteStatusBtn">Route Status</label>
-                <button type="button" id="toggleRouteStatusBtn" class="status-toggle-btn" aria-pressed="\${isEnabled ? 'true' : 'false'}" nonce="${nonce}" title="Click to toggle between Active and Disabled">
-                  <span id="routeStateDot" class="status-dot \${isEnabled ? 'online' : 'offline'}"></span>
-                  <span id="routeStateText">\${isEnabled ? 'Active Mock' : 'Disabled'}</span>
+              <div class="form-group w-150">
+                <label for="editDelayMs">
+                  <span>Delay (ms)</span>
+                  <span class="latency-links">
+                    <button type="button" class="inline-link-btn delay-preset-btn" data-delay="0">0</button>
+                    <button type="button" class="inline-link-btn delay-preset-btn" data-delay="250">250</button>
+                    <button type="button" class="inline-link-btn delay-preset-btn" data-delay="1000">1s</button>
+                    <button type="button" class="inline-link-btn delay-preset-btn" data-delay="2000">2s</button>
+                  </span>
+                </label>
+                <input type="number" id="editDelayMs" min="0" step="50" value="\${route.delayMs || 0}">
+              </div>
+              <div class="form-group w-140">
+                <label for="toggleRouteStatusBtn">State</label>
+                <button type="button" id="toggleRouteStatusBtn" class="status-toggle-btn" aria-pressed="\${isEnabled ? 'true' : 'false'}" title="Toggle route active/disabled">
+                  \${isEnabled ? '<span id="routeStateDot" class="status-dot online" aria-hidden="true"></span>' : '<span id="routeStateDot" class="status-dot is-hidden" aria-hidden="true"></span>'}
+                  <span id="routeStateText">\${isEnabled ? 'Active' : 'Disabled'}</span>
                 </button>
               </div>
             </div>
 
-            <details class="advanced-accordion">
-              <summary>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                <span>Advanced Network Latency & Metadata</span>
-              </summary>
-              <div class="advanced-content">
-                <div class="form-row">
-                  <div class="form-group" style="flex: 1;">
-                    <label for="editDelayMs">Simulated Latency (ms)</label>
-                    <input type="number" id="editDelayMs" min="0" step="50" value="\${route.delayMs || 0}" nonce="${nonce}">
-                  </div>
-                  <div class="form-group" style="flex: 1;">
-                    <label for="routeSourceInput">Route Source</label>
-                    <input type="text" id="routeSourceInput" readonly value="\${escapeHtml(route.source || 'manual')}" nonce="${nonce}">
-                  </div>
-                </div>
-              </div>
-            </details>
-
             \${route.variants ? \`
               <div class="form-group">
-                <label>Frontend UI Test States & Scenarios</label>
-                <div role="group" aria-label="Test Scenarios" style="display: flex; gap: 6px; flex-wrap: wrap;">
-                  <button type="button" class="btn-compact scenario-btn \${(!route.scenario || route.scenario === 'ok200') ? 'btn-success' : ''}" aria-pressed="\${(!route.scenario || route.scenario === 'ok200') ? 'true' : 'false'}" data-scenario="ok200" nonce="${nonce}" title="Populated Success State">200 Populated</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'loading200' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'loading200' ? 'true' : 'false'}" data-scenario="loading200" nonce="${nonce}" title="Simulated 2000ms Latency for Testing Loaders">Loading (2s Delay)</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'empty200' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'empty200' ? 'true' : 'false'}" data-scenario="empty200" nonce="${nonce}" title="Empty Collection Zero-State">Empty State (0 items)</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'bad400' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'bad400' ? 'true' : 'false'}" data-scenario="bad400" nonce="${nonce}">400 Bad Request</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'unauth401' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'unauth401' ? 'true' : 'false'}" data-scenario="unauth401" nonce="${nonce}">401 Unauthorized</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'forbidden403' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'forbidden403' ? 'true' : 'false'}" data-scenario="forbidden403" nonce="${nonce}">403 Forbidden</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'notFound404' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'notFound404' ? 'true' : 'false'}" data-scenario="notFound404" nonce="${nonce}">404 Not Found</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'rateLimit429' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'rateLimit429' ? 'true' : 'false'}" data-scenario="rateLimit429" nonce="${nonce}">429 Rate Limit</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'server500' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'server500' ? 'true' : 'false'}" data-scenario="server500" nonce="${nonce}">500 Error</button>
-                  <button type="button" class="btn-compact scenario-btn \${route.scenario === 'empty204' ? 'btn-success' : ''}" aria-pressed="\${route.scenario === 'empty204' ? 'true' : 'false'}" data-scenario="empty204" nonce="${nonce}">204 No Content</button>
+                <label>Scenario</label>
+                <div class="scenario-segmented" role="group" aria-label="Primary Scenarios">
+                  <button type="button" class="btn-compact scenario-btn \${activeScenario === 'ok200' ? 'is-selected' : ''}" aria-pressed="\${activeScenario === 'ok200' ? 'true' : 'false'}" data-scenario="ok200" title="Populated 200 OK payload">200</button>
+                  <button type="button" class="btn-compact scenario-btn \${activeScenario === 'loading200' ? 'is-selected' : ''}" aria-pressed="\${activeScenario === 'loading200' ? 'true' : 'false'}" data-scenario="loading200" title="200 OK with 2000ms simulated latency">Loading 2s</button>
+                  <button type="button" class="btn-compact scenario-btn \${activeScenario === 'empty200' ? 'is-selected' : ''}" aria-pressed="\${activeScenario === 'empty200' ? 'true' : 'false'}" data-scenario="empty200" title="Empty collection 200 OK">Empty</button>
+                  <button type="button" class="btn-compact scenario-btn \${activeScenario === 'unauth401' ? 'is-selected' : ''}" aria-pressed="\${activeScenario === 'unauth401' ? 'true' : 'false'}" data-scenario="unauth401" title="401 Unauthorized error">401</button>
+                  <button type="button" class="btn-compact scenario-btn \${activeScenario === 'notFound404' ? 'is-selected' : ''}" aria-pressed="\${activeScenario === 'notFound404' ? 'true' : 'false'}" data-scenario="notFound404" title="404 Not Found error">404</button>
+                  <button type="button" class="btn-compact scenario-btn \${activeScenario === 'server500' ? 'is-selected' : ''}" aria-pressed="\${activeScenario === 'server500' ? 'true' : 'false'}" data-scenario="server500" title="500 Internal Server Error">500</button>
+                  <select id="moreScenarioSelect" class="scenario-more-select" aria-label="More scenarios">
+                    <option value="" \${!isSecondaryScenario ? 'selected' : ''}>More...</option>
+                    <option value="mfa200" \${activeScenario === 'mfa200' ? 'selected' : ''}>2FA Challenge (200)</option>
+                    <option value="bad400" \${activeScenario === 'bad400' ? 'selected' : ''}>400 Bad Request</option>
+                    <option value="forbidden403" \${activeScenario === 'forbidden403' ? 'selected' : ''}>403 Forbidden</option>
+                    <option value="rateLimit429" \${activeScenario === 'rateLimit429' ? 'selected' : ''}>429 Rate Limit</option>
+                    <option value="empty204" \${activeScenario === 'empty204' ? 'selected' : ''}>204 No Content</option>
+                  </select>
                 </div>
-                <div id="scenarioHelpNote" class="scenario-help-note">\${getScenarioDescription(route.scenario || 'ok200')}</div>
-              </div>
-            \` : ''}
-
-            \${(route.urlPattern.includes('auth') || route.urlPattern.includes('2fa') || route.urlPattern.includes('login') || bodyStr.includes('mfaRequired') || bodyStr.includes('twoFactor')) ? \`
-              <div class="info-callout" style="border-left-color: var(--success);">
-                <strong>Interactive 2FA / Authentication Sandbox:</strong> This endpoint supports stateful two-factor verification. Send a POST with <code>{ "code": "123456" }</code> to verify, or <code>{ "code": "000000" }</code> to test authentication rejection.
+                \${activeScenario === 'mfa200' ? '<span class="mfa-inline-hint">2FA sandbox: POST {"code":"123456"} verifies; {"code":"000000"} rejects (401).</span>' : ''}
               </div>
             \` : ''}
 
             <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <span style="font-size: 11px; font-weight: 600; color: var(--muted);">Response Body</span>
-                  <span id="payloadMetrics" class="metric-pill">0.0 KB • 0 lines</span>
+              <div class="inspector-row-between">
+                <div class="inspector-row-group">
+                  <span class="inspector-sublabel">Response Body</span>
+                  <span id="payloadMetrics" class="metric-pill">0.0 KB · 0 lines</span>
                 </div>
-                <div style="display: flex; align-items: center; gap: 6px;">
+                <div class="inspector-row-group">
                   <div class="editor-mode-toggle" role="group" aria-label="Editor View Mode">
-                    <button type="button" id="viewFormattedBtn" class="active" nonce="${nonce}">Visual</button>
-                    <button type="button" id="viewRawBtn" nonce="${nonce}">Raw</button>
+                    <button type="button" id="viewFormattedBtn" class="active">Visual</button>
+                    <button type="button" id="viewRawBtn">Raw</button>
                   </div>
-                  <button type="button" id="formatJsonBtn" class="btn-compact" nonce="${nonce}">Format</button>
-                  <button type="button" id="copyInspectorBodyBtn" class="btn-compact" nonce="${nonce}">\${ICONS.copy} Copy</button>
+                  <button type="button" id="formatJsonBtn" class="btn-compact">Format</button>
+                  <button type="button" id="copyInspectorBodyBtn" class="btn-compact">\${ICONS.copy} Copy</button>
                 </div>
               </div>
               <div id="formattedBodyContainer" class="json-formatted-view" title="Click to edit raw JSON">\${syntaxHighlightJson(bodyStr)}</div>
-              <textarea id="editBody" class="json-editor" style="display: none;" aria-label="Response Body JSON Editor" nonce="${nonce}">\${escapeHtml(bodyStr)}</textarea>
-              <div id="jsonErrorBanner" class="error-banner" style="display: none; margin-top: 6px;"></div>
+              <textarea id="editBody" class="json-editor is-hidden" aria-label="Response Body JSON Editor">\${escapeHtml(bodyStr)}</textarea>
+              <div id="jsonErrorBanner" class="error-banner is-hidden" role="alert"></div>
             </div>
           </div>
         \`;
 
         updatePayloadMetrics(bodyStr);
+
+        const reloadDirtyBtn = document.getElementById('reloadDirtyRouteBtn');
+        if (reloadDirtyBtn) {
+          reloadDirtyBtn.addEventListener('click', () => {
+            isInspectorDirty = false;
+            hasExternalUpdatePending = false;
+            renderInspector();
+          });
+        }
+
+        ['editMethod', 'editUrlPattern', 'editStatusCode', 'editDelayMs'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) {
+            el.addEventListener('change', () => { isInspectorDirty = true; });
+            el.addEventListener('input', () => { isInspectorDirty = true; });
+          }
+        });
+
+        document.querySelectorAll('.delay-preset-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const delayVal = btn.getAttribute('data-delay') || '0';
+            const delayInput = document.getElementById('editDelayMs');
+            if (delayInput) {
+              delayInput.value = delayVal;
+              isInspectorDirty = true;
+            }
+          });
+        });
 
         const toggleRouteStatusBtn = document.getElementById('toggleRouteStatusBtn');
         if (toggleRouteStatusBtn) {
@@ -1249,9 +1507,10 @@ export function getWorkbenchClientScript(nonce: string): string {
               toggleRouteStatusBtn.setAttribute('aria-pressed', nextEnabled ? 'true' : 'false');
               const dot = document.getElementById('routeStateDot');
               const txt = document.getElementById('routeStateText');
-              if (dot) dot.className = 'status-dot ' + (nextEnabled ? 'online' : 'offline');
-              if (txt) txt.textContent = nextEnabled ? 'Active Mock' : 'Disabled';
+              if (dot) dot.className = nextEnabled ? 'status-dot online' : 'status-dot is-hidden';
+              if (txt) txt.textContent = nextEnabled ? 'Active' : 'Disabled';
             } else {
+              isInspectorDirty = false;
               vscode.postMessage({ type: 'toggleRoute', routeId: route.id });
             }
           });
@@ -1267,15 +1526,15 @@ export function getWorkbenchClientScript(nonce: string): string {
             viewFormattedBtn.classList.add('active');
             viewRawBtn.classList.remove('active');
             formattedContainer.innerHTML = syntaxHighlightJson(editBody.value);
-            formattedContainer.style.display = 'block';
-            editBody.style.display = 'none';
+            formattedContainer.classList.remove('is-hidden');
+            editBody.classList.add('is-hidden');
           });
 
           viewRawBtn.addEventListener('click', () => {
             viewRawBtn.classList.add('active');
             viewFormattedBtn.classList.remove('active');
-            formattedContainer.style.display = 'none';
-            editBody.style.display = 'block';
+            formattedContainer.classList.add('is-hidden');
+            editBody.classList.remove('is-hidden');
             editBody.focus();
           });
 
@@ -1284,21 +1543,22 @@ export function getWorkbenchClientScript(nonce: string): string {
           });
 
           editBody.addEventListener('input', () => {
+            isInspectorDirty = true;
             updatePayloadMetrics(editBody.value);
             const errorBanner = document.getElementById('jsonErrorBanner');
             const saveBtn = document.getElementById('saveRouteBtn');
             try {
               JSON.parse(editBody.value);
-              editBody.style.borderColor = 'var(--input-border)';
-              if (errorBanner) errorBanner.style.display = 'none';
+              editBody.classList.remove('json-editor-invalid');
+              if (errorBanner) errorBanner.classList.add('is-hidden');
               if (saveBtn) saveBtn.disabled = false;
               formattedContainer.innerHTML = syntaxHighlightJson(editBody.value);
             } catch (err) {
-              editBody.style.borderColor = 'var(--danger)';
+              editBody.classList.add('json-editor-invalid');
               if (saveBtn) saveBtn.disabled = true;
               if (errorBanner) {
                 errorBanner.textContent = 'JSON Syntax Error: ' + err.message;
-                errorBanner.style.display = 'flex';
+                errorBanner.classList.remove('is-hidden');
               }
             }
           });
@@ -1311,46 +1571,56 @@ export function getWorkbenchClientScript(nonce: string): string {
           });
         }
 
+        function applyScenarioSelection(sc) {
+          if (!sc || !route.variants || !route.variants[sc]) return;
+          isInspectorDirty = false;
+          const v = route.variants[sc];
+          route.scenario = sc;
+          document.querySelectorAll('.scenario-btn').forEach(b => {
+            const match = b.getAttribute('data-scenario') === sc;
+            b.classList.toggle('is-selected', match);
+            b.setAttribute('aria-pressed', match ? 'true' : 'false');
+          });
+          const statusEl = document.getElementById('editStatusCode');
+          if (statusEl) statusEl.value = String(v.statusCode);
+          if (editBody) {
+            editBody.value = v.rawBody;
+            editBody.classList.remove('json-editor-invalid');
+          }
+          const errorBanner = document.getElementById('jsonErrorBanner');
+          if (errorBanner) errorBanner.classList.add('is-hidden');
+          const saveBtn = document.getElementById('saveRouteBtn');
+          if (saveBtn) saveBtn.disabled = false;
+          if (formattedContainer) formattedContainer.innerHTML = syntaxHighlightJson(v.rawBody);
+          updatePayloadMetrics(v.rawBody);
+
+          const delayInput = document.getElementById('editDelayMs');
+          if (sc === 'loading200') {
+            if (delayInput) delayInput.value = '2000';
+            route.delayMs = 2000;
+          } else if (route.delayMs === 2000) {
+            if (delayInput) delayInput.value = '0';
+            route.delayMs = 0;
+          }
+
+          vscode.postMessage({ type: 'switchRouteScenario', routeId: route.id, scenario: sc });
+          renderInspector();
+        }
+
         document.querySelectorAll('.scenario-btn').forEach(btn => {
           btn.addEventListener('click', () => {
-            const sc = btn.getAttribute('data-scenario');
-            if (route.variants && route.variants[sc]) {
-              const v = route.variants[sc];
-              route.scenario = sc;
-              document.querySelectorAll('.scenario-btn').forEach(b => {
-                b.classList.remove('btn-success');
-                b.setAttribute('aria-pressed', 'false');
-              });
-              btn.classList.add('btn-success');
-              btn.setAttribute('aria-pressed', 'true');
-              const statusEl = document.getElementById('editStatusCode');
-              if (statusEl) statusEl.value = String(v.statusCode);
-              if (editBody) {
-                editBody.value = v.rawBody;
-                editBody.style.borderColor = 'var(--input-border)';
-              }
-              const errorBanner = document.getElementById('jsonErrorBanner');
-              if (errorBanner) errorBanner.style.display = 'none';
-              const saveBtn = document.getElementById('saveRouteBtn');
-              if (saveBtn) saveBtn.disabled = false;
-              if (formattedContainer) formattedContainer.innerHTML = syntaxHighlightJson(v.rawBody);
-              const noteEl = document.getElementById('scenarioHelpNote');
-              if (noteEl) noteEl.textContent = getScenarioDescription(sc);
-              updatePayloadMetrics(v.rawBody);
-
-              const delayInput = document.getElementById('editDelayMs');
-              if (sc === 'loading200') {
-                if (delayInput) delayInput.value = '2000';
-                route.delayMs = 2000;
-              } else if (route.delayMs === 2000) {
-                if (delayInput) delayInput.value = '0';
-                route.delayMs = 0;
-              }
-
-              vscode.postMessage({ type: 'switchRouteScenario', routeId: route.id, scenario: sc });
-            }
+            applyScenarioSelection(btn.getAttribute('data-scenario'));
           });
         });
+
+        const moreScenarioSelect = document.getElementById('moreScenarioSelect');
+        if (moreScenarioSelect) {
+          moreScenarioSelect.addEventListener('change', (e) => {
+            if (e.target.value) {
+              applyScenarioSelection(e.target.value);
+            }
+          });
+        }
 
         const formatBtn = document.getElementById('formatJsonBtn');
         if (formatBtn && editBody) {
@@ -1361,15 +1631,16 @@ export function getWorkbenchClientScript(nonce: string): string {
               const parsed = JSON.parse(editBody.value);
               const pretty = JSON.stringify(parsed, null, 2);
               editBody.value = pretty;
-              editBody.style.borderColor = 'var(--input-border)';
-              if (errorBanner) errorBanner.style.display = 'none';
+              editBody.classList.remove('json-editor-invalid');
+              if (errorBanner) errorBanner.classList.add('is-hidden');
               if (saveBtn) saveBtn.disabled = false;
               if (formattedContainer) formattedContainer.innerHTML = syntaxHighlightJson(pretty);
               updatePayloadMetrics(pretty);
+              isInspectorDirty = true;
             } catch (err) {
               if (errorBanner) {
                 errorBanner.textContent = 'Cannot format invalid JSON: ' + err.message;
-                errorBanner.style.display = 'flex';
+                errorBanner.classList.remove('is-hidden');
               }
             }
           });
@@ -1379,6 +1650,14 @@ export function getWorkbenchClientScript(nonce: string): string {
         saveBtnEl.addEventListener('click', () => {
           const method = document.getElementById('editMethod').value;
           const urlPattern = document.getElementById('editUrlPattern').value.trim();
+          const errorBanner = document.getElementById('jsonErrorBanner');
+          if (!urlPattern) {
+            if (errorBanner) {
+              errorBanner.textContent = 'Cannot save route: URL Pattern cannot be empty.';
+              errorBanner.classList.remove('is-hidden');
+            }
+            return;
+          }
           const statusCode = parseInt(document.getElementById('editStatusCode').value, 10);
           const delayMs = parseInt(document.getElementById('editDelayMs').value, 10) || 0;
           const rawBody = document.getElementById('editBody').value;
@@ -1387,16 +1666,14 @@ export function getWorkbenchClientScript(nonce: string): string {
           try {
             parsedBody = JSON.parse(rawBody);
           } catch (err) {
-            const errorBanner = document.getElementById('jsonErrorBanner');
             if (errorBanner) {
               errorBanner.textContent = 'Cannot save route: Invalid JSON syntax (' + err.message + ')';
-              errorBanner.style.display = 'flex';
+              errorBanner.classList.remove('is-hidden');
             }
             return;
           }
 
           let updatedVariants = route.variants;
-          const activeScenario = route.scenario || 'ok200';
           if (updatedVariants && updatedVariants[activeScenario]) {
             updatedVariants = {
               ...updatedVariants,
@@ -1424,16 +1701,18 @@ export function getWorkbenchClientScript(nonce: string): string {
             variants: updatedVariants,
           };
 
+          isInspectorDirty = false;
+          hasExternalUpdatePending = false;
           vscode.postMessage({ type: 'saveRoute', route: savedRoute });
           selectedId = savedRoute.id;
 
           saveBtnEl.innerHTML = ICONS.check + ' <span>Saved</span>';
-          saveBtnEl.classList.add('btn-success');
+          saveBtnEl.classList.add('is-copied');
           setTimeout(() => {
             const currentSaveBtn = document.getElementById('saveRouteBtn');
             if (currentSaveBtn) {
-              currentSaveBtn.innerHTML = ICONS.save + ' <span>Save Route</span>';
-              currentSaveBtn.classList.remove('btn-success');
+              currentSaveBtn.innerHTML = ICONS.save + ' <span>Save</span>';
+              currentSaveBtn.classList.remove('is-copied');
             }
           }, 1500);
         });
@@ -1446,17 +1725,39 @@ export function getWorkbenchClientScript(nonce: string): string {
             });
           }
 
-          document.getElementById('deleteRouteBtn').addEventListener('click', () => {
-            vscode.postMessage({ type: 'deleteRoute', routeId: route.id });
-            selectedId = null;
-            render();
-          });
+          const deleteBtn = document.getElementById('deleteRouteBtn');
+          if (deleteBtn) {
+            deleteBtn.addEventListener('click', () => {
+              if (deleteBtn.getAttribute('data-confirm') !== 'true') {
+                deleteBtn.setAttribute('data-confirm', 'true');
+                deleteBtn.innerHTML = ICONS.trash + ' <span>Confirm?</span>';
+                if (deleteConfirmTimer) clearTimeout(deleteConfirmTimer);
+                deleteConfirmTimer = setTimeout(() => {
+                  const currentDel = document.getElementById('deleteRouteBtn');
+                  if (currentDel) {
+                    currentDel.removeAttribute('data-confirm');
+                    currentDel.innerHTML = ICONS.trash + ' <span>Delete</span>';
+                  }
+                }, 3000);
+                return;
+              }
+              if (deleteConfirmTimer) clearTimeout(deleteConfirmTimer);
+              isInspectorDirty = false;
+              vscode.postMessage({ type: 'deleteRoute', routeId: route.id });
+              selectedId = null;
+              render();
+            });
+          }
 
           const copyPlaywrightBtn = document.getElementById('copyPlaywrightBtn');
           if (copyPlaywrightBtn) {
             copyPlaywrightBtn.addEventListener('click', () => {
-              const spec = \`await page.route('**\${route.urlPattern}', async (route) => {
-  await route.fulfill({
+              const globUrl = toPlaywrightGlob(route.urlPattern);
+              const delayLine = route.delayMs && route.delayMs > 0
+                ? '  await new Promise((resolve) => setTimeout(resolve, ' + route.delayMs + '));\\n'
+                : '';
+              const spec = \`await page.route('\${globUrl}', async (route) => {
+\${delayLine}  await route.fulfill({
     status: \${route.statusCode},
     contentType: 'application/json',
     body: JSON.stringify(\${bodyStr}, null, 2),
@@ -1471,8 +1772,10 @@ export function getWorkbenchClientScript(nonce: string): string {
             copyMswBtn.addEventListener('click', () => {
               const m = (route.method || 'get').toLowerCase();
               const fn = ['get', 'post', 'put', 'patch', 'delete'].includes(m) ? m : 'all';
-              const handler = \`http.\${fn}('\${route.urlPattern}', () => {
-  return HttpResponse.json(\${bodyStr}, { status: \${route.statusCode} });
+              const hasDelay = route.delayMs && route.delayMs > 0;
+              const delayLine = hasDelay ? '  await delay(' + route.delayMs + ');\\n' : '';
+              const handler = \`http.\${fn}('\${route.urlPattern}', \${hasDelay ? 'async ' : ''}() => {
+\${delayLine}  return HttpResponse.json(\${bodyStr}, { status: \${route.statusCode} });
 });\`;
               copyWithFeedback(copyMswBtn, handler, 'MSW v2 handler');
             });

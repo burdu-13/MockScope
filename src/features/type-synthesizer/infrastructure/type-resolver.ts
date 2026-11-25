@@ -1,7 +1,7 @@
 import * as ts from 'typescript';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import type { GeneratedMock } from '../../../shared/kernel/index';
+import type { GeneratedMock, ResolvedTypeModel, ResolvedRelatedModel } from '../../../shared/kernel/index';
 import { synthesizeStringValue, synthesizeNumberValue, synthesizeBooleanValue } from '../domain/heuristics';
 import { generateAuthScenarios, isAuthEndpoint, is2faEndpoint } from '../domain/auth-mock';
 
@@ -184,7 +184,7 @@ export class TypeSynthesizerEngine {
       this.visitedFiles.add(path.normalize(filePath));
     }
 
-    const sourceFile = ts.createSourceFile('types.ts', sourceCode, ts.ScriptTarget.Latest, true);
+    const sourceFile = ts.createSourceFile(filePath || 'types.ts', sourceCode, ts.ScriptTarget.Latest, true);
 
     const visit = (node: ts.Node) => {
       if (ts.isInterfaceDeclaration(node)) {
@@ -550,6 +550,139 @@ export class TypeSynthesizerEngine {
     return keys;
   }
 
+  public inspectModel(rawTypeName: string): ResolvedTypeModel {
+    const unwrapAll = (input: string): { base: string; extraRefs: string[] } => {
+      let current = unwrapTypeWrappers(input).trim();
+      const extraRefs: string[] = [];
+      let changed = true;
+      while (changed) {
+        changed = false;
+        if (current.endsWith('[]')) {
+          current = current.slice(0, -2).trim();
+          changed = true;
+        } else {
+          const arrMatch = current.match(/^(?:ReadonlyArray|Array)<([\s\S]+)>$/);
+          if (arrMatch && arrMatch[1]) {
+            current = arrMatch[1].trim();
+            changed = true;
+          }
+        }
+      }
+      const angleIdx = current.indexOf('<');
+      if (angleIdx > 0 && current.endsWith('>')) {
+        const basePart = current.slice(0, angleIdx).trim();
+        const args = splitTopLevelTypeArgs(current.slice(angleIdx + 1, -1));
+        for (const arg of args) {
+          const unwrappedArg = unwrapAll(arg).base;
+          if (unwrappedArg && !extraRefs.includes(unwrappedArg)) {
+            extraRefs.push(unwrappedArg);
+          }
+        }
+        return { base: basePart, extraRefs };
+      }
+      return { base: current, extraRefs };
+    };
+
+    const { base: baseTypeName, extraRefs } = unwrapAll(rawTypeName);
+
+    if (baseTypeName.startsWith('{') && baseTypeName.endsWith('}')) {
+      return {
+        requestedType: rawTypeName,
+        baseTypeName: 'InlineObject',
+        found: true,
+        kind: 'inline',
+        definitionText: `type InlineModel = ${baseTypeName};`,
+      };
+    }
+
+    const primitives = new Set(['string', 'number', 'boolean', 'void', 'undefined', 'null', 'any', 'unknown', 'date']);
+    if (primitives.has(baseTypeName.toLowerCase())) {
+      return {
+        requestedType: rawTypeName,
+        baseTypeName,
+        found: true,
+        kind: 'primitive',
+        definitionText: `// Built-in TypeScript type: ${baseTypeName}`,
+      };
+    }
+
+    if (!this.typeDeclarations.has(baseTypeName)) {
+      this.resolveImportedDeclaration(baseTypeName);
+    }
+
+    const decl = this.typeDeclarations.get(baseTypeName);
+    if (!decl) {
+      return {
+        requestedType: rawTypeName,
+        baseTypeName,
+        found: false,
+        definitionText: `// Declaration for "${baseTypeName}" was not found in the current file or workspace imports.`,
+      };
+    }
+
+    const getDeclKind = (d: TypeDeclaration): 'interface' | 'type' | 'enum' | 'class' => {
+      if (ts.isInterfaceDeclaration(d)) return 'interface';
+      if (ts.isTypeAliasDeclaration(d)) return 'type';
+      if (ts.isEnumDeclaration(d)) return 'enum';
+      return 'class';
+    };
+
+    const getOrigin = (d: TypeDeclaration): { filePath?: string | undefined; line: number; text: string } => {
+      const sf = d.getSourceFile();
+      const pos = sf.getLineAndCharacterOfPosition(d.getStart(sf));
+      const resolvedFile =
+        sf.fileName && sf.fileName !== 'types.ts' ? path.normalize(sf.fileName) : this.currentFilePath;
+      return {
+        filePath: resolvedFile,
+        line: pos.line,
+        text: d.getText(sf),
+      };
+    };
+
+    const mainOrigin = getOrigin(decl);
+    const refNames = new Set<string>(extraRefs);
+    const collectRefs = (node: ts.Node) => {
+      if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+        const ref = node.typeName.text;
+        if (ref !== baseTypeName && !BUILTIN_TYPE_KEYWORDS.has(ref) && !primitives.has(ref.toLowerCase())) {
+          refNames.add(ref);
+        }
+      }
+      ts.forEachChild(node, collectRefs);
+    };
+    collectRefs(decl);
+
+    const relatedModels: ResolvedRelatedModel[] = [];
+    for (const refName of refNames) {
+      if (relatedModels.length >= 6) break;
+      if (!this.typeDeclarations.has(refName)) {
+        this.resolveImportedDeclaration(refName);
+      }
+      const refDecl = this.typeDeclarations.get(refName);
+      if (refDecl) {
+        const refOrigin = getOrigin(refDecl);
+        relatedModels.push({
+          name: refName,
+          kind: getDeclKind(refDecl),
+          definitionText: refOrigin.text,
+          filePath: refOrigin.filePath,
+          line: refOrigin.line,
+        });
+      }
+    }
+
+    return {
+      requestedType: rawTypeName,
+      baseTypeName,
+      found: true,
+      kind: getDeclKind(decl),
+      definitionText: mainOrigin.text,
+      filePath: mainOrigin.filePath,
+      line: mainOrigin.line,
+      ...(relatedModels.length > 0 ? { relatedModels } : {}),
+    };
+  }
+
   public synthesize(
     typeName: string,
     options: SynthesisOptions = { depth: 0, maxDepth: 4, visitedCounts: new Map() }
@@ -649,6 +782,12 @@ export class TypeSynthesizerEngine {
           });
           return rec;
         }
+        if (keyType.toLowerCase() === 'string') {
+          return {
+            item_1: this.synthesize(valType, { ...options, depth: depth + 1, itemIndex: 0 }),
+            item_2: this.synthesize(valType, { ...options, depth: depth + 1, itemIndex: 1 }),
+          };
+        }
         return {};
       }
     }
@@ -672,7 +811,7 @@ export class TypeSynthesizerEngine {
         })
       );
     }
-    const arrayMatch = cleanType.match(/^Array<([\s\S]+)>$/);
+    const arrayMatch = cleanType.match(/^(?:ReadonlyArray|Array)<([\s\S]+)>$/);
     if (arrayMatch && arrayMatch[1]) {
       if (depth + 1 >= maxDepth) return [];
       const inner = arrayMatch[1];
@@ -736,6 +875,7 @@ export class TypeSynthesizerEngine {
     if (lower === 'number') return synthesizeNumberValue('amount', itemIndex, enclosingTypeName);
     if (lower === 'boolean') return synthesizeBooleanValue('flag', itemIndex);
     if (lower === 'void' || lower === 'undefined' || lower === 'null') return null;
+    if (lower === 'date') return '2026-10-18T12:00:00Z';
     if (lower === 'any' || lower === 'unknown') return { sampleKey: 'sampleValue' };
 
     const count = visitedCounts.get(cleanType) || 0;
@@ -1023,6 +1163,15 @@ export function wrapInHybridEnvelope(body: unknown): unknown {
   }
 
   return hybrid;
+}
+
+export function inspectTypeModel(
+  typeName: string,
+  sourceCode?: string,
+  filePath?: string
+): ResolvedTypeModel {
+  const engine = new TypeSynthesizerEngine(sourceCode, filePath);
+  return engine.inspectModel(typeName);
 }
 
 export function synthesizePayload(

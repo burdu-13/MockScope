@@ -69,4 +69,25 @@ describe('test-exporter', () => {
     expect(playwrightCode).toContain('status: 200');
     expect(playwrightCode).toContain('"message": "success"');
   });
+
+  it('should convert :param and {param} segments to globs and preserve headers and delayMs', () => {
+    const paramCall: DetectedApiCall = {
+      ...sampleCall,
+      method: 'GET',
+      url: '/api/v1/users/:id/orders/{orderId}',
+    };
+    const delayedMock: GeneratedMock = {
+      ...sampleMock,
+      headers: { 'Content-Type': 'application/json', 'X-RateLimit-Remaining': '99' },
+    };
+
+    const pw = generatePlaywrightSpec(paramCall, delayedMock, 500);
+    expect(pw).toContain("page.route('**/api/v1/users/*/orders/*'");
+    expect(pw).toContain('setTimeout(resolve, 500)');
+    expect(pw).toContain('X-RateLimit-Remaining');
+
+    const msw = generateMswHandler(paramCall, delayedMock, 500);
+    expect(msw).toContain('await delay(500);');
+    expect(msw).toContain('X-RateLimit-Remaining');
+  });
 });

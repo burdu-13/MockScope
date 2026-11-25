@@ -5,18 +5,20 @@ import {
   CircularRingBuffer,
   sanitizeHeaders,
   assertLoopbackHost,
+  RouteTable,
   type MockRoute,
   type TrafficEntry,
+  type NetworkRoutingPolicy,
   globalEventBus,
   detectImageType,
   generatePlaceholderSvg,
   generateMockJwt,
   generateCompanionAuthResponse,
 } from '../../../shared/kernel/index';
-import { RouteTable } from './route-table';
 import type { ProxyController, JitRouteResolver } from '../domain/proxy.types';
 
 export const DEFAULT_PROXY_PORT = 45990;
+const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
 const PROTECTED_RESPONSE_KEYS = new Set([
   'id',
@@ -42,15 +44,18 @@ const PROTECTED_RESPONSE_KEYS = new Set([
 export class RuntimeProxy implements ProxyController {
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
-  private readonly routeTable = new RouteTable();
+  private readonly routeTable: RouteTable;
   private readonly trafficLedger = new CircularRingBuffer<TrafficEntry>(100);
   private readonly activeSockets = new Set<Socket>();
   private jitRouteResolver: JitRouteResolver | null = null;
+  private routingPolicy: NetworkRoutingPolicy = 'isolated';
+  private upstreamBaseUrl: string | undefined;
   private _port: number;
   private _isRunning: boolean = false;
 
-  constructor(port: number = DEFAULT_PROXY_PORT) {
+  constructor(port: number = DEFAULT_PROXY_PORT, sharedRouteTable?: RouteTable) {
     this._port = port;
+    this.routeTable = sharedRouteTable ?? new RouteTable();
   }
 
   public get port(): number {
@@ -63,6 +68,24 @@ export class RuntimeProxy implements ProxyController {
 
   public setJitRouteResolver(resolver: JitRouteResolver): void {
     this.jitRouteResolver = resolver;
+  }
+
+  public setRoutingPolicy(policy: NetworkRoutingPolicy, upstreamBaseUrl?: string): void {
+    if (policy === 'passthrough' && upstreamBaseUrl) {
+      const parsed = new URL(upstreamBaseUrl);
+      assertLoopbackHost(parsed.hostname);
+      this.upstreamBaseUrl = upstreamBaseUrl.replace(/\/+$/, '');
+    } else if (policy === 'isolated') {
+      this.upstreamBaseUrl = undefined;
+    }
+    this.routingPolicy = policy;
+  }
+
+  public getRoutingPolicy(): { policy: NetworkRoutingPolicy; upstreamBaseUrl?: string | undefined } {
+    return {
+      policy: this.routingPolicy,
+      upstreamBaseUrl: this.upstreamBaseUrl,
+    };
   }
 
   public addRoute(route: MockRoute): void {
@@ -210,8 +233,31 @@ export class RuntimeProxy implements ProxyController {
     }
 
     const chunks: Buffer[] = [];
-    req.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    let totalBodyBytes = 0;
+    let bodyLimitExceeded = false;
+
+    req.on('data', (chunk) => {
+      if (bodyLimitExceeded) return;
+      const buf = Buffer.from(chunk);
+      totalBodyBytes += buf.length;
+      if (totalBodyBytes > MAX_REQUEST_BODY_BYTES) {
+        bodyLimitExceeded = true;
+        chunks.length = 0;
+        const payloadTooLarge = JSON.stringify({
+          error: 'Payload Too Large',
+          message: `MockScope Proxy: Request body exceeds ${MAX_REQUEST_BODY_BYTES} byte safety limit.`,
+        });
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Length', Buffer.byteLength(payloadTooLarge, 'utf-8'));
+        res.writeHead(413);
+        res.end(payloadTooLarge);
+        req.destroy();
+        return;
+      }
+      chunks.push(buf);
+    });
     req.on('end', async () => {
+      if (bodyLimitExceeded) return;
       const requestBody = Buffer.concat(chunks).toString('utf-8');
       const sanitizedReqHeaders = sanitizeHeaders(req.headers as Record<string, string>);
 
@@ -282,7 +328,7 @@ export class RuntimeProxy implements ProxyController {
           matchedRoute.variants &&
           matchedRoute.variants[matchedRoute.scenario]
         ) {
-          const activeVariant = matchedRoute.variants[matchedRoute.scenario];
+          const activeVariant = matchedRoute.variants[matchedRoute.scenario]!;
           statusCode = activeVariant.statusCode;
           responseHeaders = {
             'Content-Type': 'application/json',
@@ -426,6 +472,25 @@ export class RuntimeProxy implements ProxyController {
         statusCode = 200;
         responseHeaders = { 'Content-Type': 'image/svg+xml; charset=utf-8' };
         responseBody = generatePlaceholderSvg(detectImageType(url));
+      } else if (this.routingPolicy === 'passthrough' && this.upstreamBaseUrl) {
+        try {
+          const upstreamRes = await this.forwardToLocalUpstream(
+            method,
+            url,
+            req.headers as Record<string, string | string[] | undefined>,
+            requestBody
+          );
+          statusCode = upstreamRes.statusCode;
+          responseHeaders = upstreamRes.headers;
+          responseBody = upstreamRes.body;
+        } catch (err: unknown) {
+          statusCode = 502;
+          responseHeaders = { 'Content-Type': 'application/json' };
+          responseBody = JSON.stringify({
+            error: 'Bad Gateway',
+            message: `MockScope Passthrough Error: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
       }
 
       const durationMs = Date.now() - startTime;
@@ -463,6 +528,107 @@ export class RuntimeProxy implements ProxyController {
       res.writeHead(statusCode);
       res.end(responseBody);
     });
+  }
+
+  private forwardToLocalUpstream(
+    method: string,
+    requestUrl: string,
+    incomingHeaders: Record<string, string | string[] | undefined>,
+    requestBody: string
+  ): Promise<{ statusCode: number; headers: Record<string, string>; body: string }> {
+    const base = this.upstreamBaseUrl!;
+    const targetUrl = new URL(requestUrl, base);
+    assertLoopbackHost(targetUrl.hostname);
+
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(incomingHeaders)) {
+        const lower = k.toLowerCase();
+        if (lower === 'host' || lower === 'content-length' || v === undefined) continue;
+        headers[k] = Array.isArray(v) ? v.join(', ') : v;
+      }
+
+      const req = http.request(
+        {
+          hostname: targetUrl.hostname,
+          port: targetUrl.port || 80,
+          path: targetUrl.pathname + targetUrl.search,
+          method,
+          headers,
+        },
+        (upstreamRes) => {
+          const resChunks: Buffer[] = [];
+          upstreamRes.on('data', (c) => resChunks.push(Buffer.from(c)));
+          upstreamRes.on('end', () => {
+            const resHeaders: Record<string, string> = {};
+            for (const [k, v] of Object.entries(upstreamRes.headers)) {
+              if (v === undefined) continue;
+              resHeaders[k] = Array.isArray(v) ? v.join(', ') : v;
+            }
+            resolve({
+              statusCode: upstreamRes.statusCode || 200,
+              headers: resHeaders,
+              body: Buffer.concat(resChunks).toString('utf-8'),
+            });
+          });
+        }
+      );
+
+      req.on('error', reject);
+      if (requestBody && method !== 'GET' && method !== 'HEAD') {
+        req.write(requestBody);
+      }
+      req.end();
+    });
+  }
+
+  private extractCollectionPrefix(cleanPath: string, urlPattern?: string): string | undefined {
+    const normalizedPath = (cleanPath.split('?')[0] || '/').replace(/\/+$/, '') || '/';
+    const segments = normalizedPath.split('/').filter(Boolean);
+    if (segments.length === 0) {
+      return undefined;
+    }
+
+    if (urlPattern) {
+      const cleanPattern = (urlPattern.split('?')[0] || '/')
+        .replace(/\{([a-zA-Z0-9_]+)\}/g, ':$1')
+        .replace(/\/+$/, '');
+      const patternSegs = cleanPattern.split('/').filter(Boolean);
+      const paramIdx = patternSegs.findIndex((s) => s.startsWith(':') || s === '*');
+      if (paramIdx > 0) {
+        return '/' + patternSegs.slice(0, paramIdx).join('/').toLowerCase();
+      }
+      const lastPatternSeg = patternSegs[patternSegs.length - 1]?.toLowerCase();
+      if (
+        lastPatternSeg &&
+        (lastPatternSeg === 'create' ||
+          lastPatternSeg === 'request' ||
+          lastPatternSeg === 'update' ||
+          lastPatternSeg === 'delete') &&
+        patternSegs.length > 1
+      ) {
+        return '/' + patternSegs.slice(0, -1).join('/').toLowerCase();
+      }
+    }
+
+    const lastSeg = segments[segments.length - 1]!.toLowerCase();
+    if (
+      (lastSeg === 'create' ||
+        lastSeg === 'request' ||
+        lastSeg === 'update' ||
+        lastSeg === 'delete' ||
+        lastSeg.startsWith('id_') ||
+        /^\d+$/.test(lastSeg)) &&
+      segments.length > 1
+    ) {
+      return '/' + segments.slice(0, -1).join('/').toLowerCase();
+    }
+    return '/' + segments.join('/').toLowerCase();
+  }
+
+  private matchesCollectionRoute(routeUrlPattern: string, resourcePrefix: string): boolean {
+    const normalized = (routeUrlPattern.split('?')[0] || '/').replace(/\/+$/, '').toLowerCase() || '/';
+    return normalized === resourcePrefix;
   }
 
   private extractPathParamValue(url: string, urlPattern: string): string | undefined {
@@ -504,13 +670,12 @@ export class RuntimeProxy implements ProxyController {
   ): string {
     try {
       const cleanPath = url.split('?')[0] || '/';
-      const prefixMatch = cleanPath.match(/^(\/[a-zA-Z0-9_-]+)/);
-      const resourcePrefix = prefixMatch?.[1]?.toLowerCase();
+      const resourcePrefix = this.extractCollectionPrefix(cleanPath, matchedRoute.urlPattern);
       const extractedId = this.extractPathParamValue(url, matchedRoute.urlPattern);
 
       if (method === 'DELETE' && extractedId && resourcePrefix) {
         for (const route of this.routeTable.getAll()) {
-          if (route.method === 'GET' && route.urlPattern.toLowerCase().startsWith(resourcePrefix) && Array.isArray(route.body)) {
+          if (route.method === 'GET' && this.matchesCollectionRoute(route.urlPattern, resourcePrefix) && Array.isArray(route.body)) {
             const list = route.body as Array<Record<string, unknown>>;
             const idx = list.findIndex((item) => item && (item['id'] === extractedId || item['cardId'] === extractedId));
             if (idx !== -1) {
@@ -529,7 +694,7 @@ export class RuntimeProxy implements ProxyController {
 
           if (resourcePrefix) {
             for (const route of this.routeTable.getAll()) {
-              if (route.method === 'GET' && route.urlPattern.toLowerCase().startsWith(resourcePrefix) && Array.isArray(route.body)) {
+              if (route.method === 'GET' && this.matchesCollectionRoute(route.urlPattern, resourcePrefix) && Array.isArray(route.body)) {
                 const list = route.body as Array<Record<string, unknown>>;
                 const matchedItem = list.find(
                   (item) => item && (item['id'] === extractedId || item['cardId'] === extractedId)
@@ -637,13 +802,12 @@ export class RuntimeProxy implements ProxyController {
       }
 
       const cleanPath = url.split('?')[0] || '/';
-      const prefixMatch = cleanPath.match(/^(\/[a-zA-Z0-9_-]+)/);
-      const resourcePrefix = prefixMatch?.[1]?.toLowerCase();
+      const resourcePrefix = this.extractCollectionPrefix(cleanPath, matchedRoute.urlPattern);
       const urlParamId = this.extractPathParamValue(url, matchedRoute.urlPattern);
 
       if (Array.isArray(parsedReq) && resourcePrefix) {
         for (const route of this.routeTable.getAll()) {
-          if (route.method === 'GET' && route.urlPattern.toLowerCase().startsWith(resourcePrefix) && Array.isArray(route.body)) {
+          if (route.method === 'GET' && this.matchesCollectionRoute(route.urlPattern, resourcePrefix) && Array.isArray(route.body)) {
             const list = route.body as Array<Record<string, unknown>>;
             for (const patchItem of parsedReq) {
               if (patchItem && typeof patchItem === 'object' && 'id' in patchItem) {
@@ -674,11 +838,11 @@ export class RuntimeProxy implements ProxyController {
 
         if (resourcePrefix) {
           for (const route of this.routeTable.getAll()) {
-            if (route.method === 'GET' && route.urlPattern.toLowerCase().startsWith(resourcePrefix) && Array.isArray(route.body)) {
+            if (route.method === 'GET' && this.matchesCollectionRoute(route.urlPattern, resourcePrefix) && Array.isArray(route.body)) {
               const list = route.body as Array<Record<string, unknown>>;
               const isCreateAction =
                 method === 'POST' &&
-                (cleanPath.includes('create') || cleanPath.includes('request') || cleanPath === route.urlPattern);
+                (cleanPath.includes('create') || cleanPath.includes('request') || this.matchesCollectionRoute(cleanPath, resourcePrefix));
 
               if (isCreateAction && list.length > 0 && list[0] && typeof list[0] === 'object') {
                 const template = { ...(list[0] as Record<string, unknown>) };
